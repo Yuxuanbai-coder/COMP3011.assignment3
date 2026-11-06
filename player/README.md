@@ -1,0 +1,121 @@
+# COMP3011 Assignment 2: Video Player
+
+A JavaFX video player for Adelaide University COMP3011 Assignment 2. The project extends the supplied player with ordered command-line compositing effects, background video and audio workers, and row-parallel processing for independent pixel operations.
+
+Assignment specification: <https://learn.adelaide.edu.au/courses/30747/assignments/94505>
+
+## Attribution
+
+The starting project and assignment requirements were supplied for COMP3011. Starter-file attribution and copyright notices are retained in the source files and `pom.xml`: Simon Ratcliffe, in collaboration with GPT-5.6 Terra; Copyright 2026 Simon Ratcliffe.
+
+The student implementation and changes are attributed to **Yuxuan Bai (a2993969)**, with **OpenAI Codex AI assistance**. AI assistance was only used for implementation suggestions. The student is responsible for reviewing and submitting the integrated work.
+
+Third-party libraries are consumed as Maven dependencies rather than copied into this repository. The versions used by this project are declared in `pom.xml`; consult each project for its license:
+
+- OpenJFX Controls 26.0.2
+- JavaCV Platform 1.5.13 (including its native media dependencies)
+- JUnit Jupiter 6.0.2, test scope only
+
+## Design overview
+
+The application follows a model-view-controller split:
+
+- `VideoPlayerApp` starts JavaFX, chooses the display, and applies launch settings.
+- `CommandLineController` validates launch arguments. `FrameProcessorOption` is the registry mapping effect flags to processor factories.
+- `VideoPlayerController` connects view actions and keyboard shortcuts to the model.
+- `VideoPlayerView` owns the controls and image display.
+- `VideoPlayerModel` coordinates media playback, audio output, queues, timing, and worker communication.
+- Each `FrameProcessor` implements one compositing effect. The selected processor instances are applied in command-line order; repeated flags create repeated stages.
+
+### Thread ownership and communication
+
+| Context | Responsibility | Communication |
+| --- | --- | --- |
+| JavaFX application thread | Handles input and window events; the `AnimationTimer` drains completed events and due frames and updates the view. It does not decode video. | Sends playback commands to the playback worker; consumes playback events and prepared frames. |
+| Playback worker | Owns the video decoder, reads video frames, applies effects in their requested order, converts completed frames, and copies timestamped audio samples. | Sends prepared frames and playback events through queues; sends PCM packets to the audio-output worker through a bounded queue. |
+| Audio-output worker | Owns the audio player/device and writes queued PCM when its timestamp is due on the shared playback clock. | Receives audio packets and audio-control commands through queues. |
+| Common fork-join pool | Runs independent rows inside eligible pixel effects when the frame is large enough. | Each effect waits for its row tasks to finish before the next effect starts. |
+
+The video-frame queue is bounded to 3 frames and the audio-packet queue to 64 packets. When the video queue is full, the playback worker pauses frame preparation; when the audio queue is full, it drops the oldest packet to prevent unbounded audio latency. Playback commands and UI events are transferred through separate queues. Playback-generation identifiers let the consumers discard stale frames or audio after a seek or restart. Atomic snapshots carry state that must be observed across threads.
+
+Effects remain ordered as a whole. Only pixel operations whose rows write to disjoint regions use `FrameProcessor.forEachRow`; effects with overlapping writes remain sequential. This keeps the visible effect order deterministic while allowing safe parallel work within suitable effects.
+
+### Controls
+
+Buttons and keyboard shortcuts are wired by `VideoPlayerController`:
+
+- Space: pause or resume
+- Left / Right arrows: seek backward / forward five seconds
+- Home: restart from the beginning
+- A: toggle audio
+- Escape: stop and close playback
+
+## Command-line options
+
+Run `--help` to print the authoritative option list. Launch options are `-h` / `--help`, `-a` / `--audio`, `-x` / `--maximise`, `-1` / `--monitor-1`, and `-2` / `--monitor-2`.
+
+The frame effects are:
+
+| Short option | Long option | Effect |
+| --- | --- | --- |
+| `-n` | `--number-frames` | Draw the frame number |
+| `-s` | `--scratch-frames` | Draw vertical scratches |
+| `-f` | `--flicker-frames` | Randomly dim frames |
+| `-w` | `--black-and-white` | Convert to black and white |
+| `-y` | `--yellow-frames` | Apply a warmer colour temperature |
+| `-v` | `--vignette-frames` | Darken frame edges |
+| `-d` | `--dust-frames` | Draw dust and hair marks |
+| `-j` | `--jitter-frames` | Displace frames by a few pixels |
+| `-m` | `--mottle-frames` | Add cloudy emulsion mottling |
+| `-b` | `--bleed-frames` | Bleed light into frames |
+| `-p` | `--pepper-frames` | Add dark spots and blotches |
+
+Options may be combined, mixed between short and long forms, and repeated. Their command-line order is the effect order. For example, `-jfddn` applies jitter, flicker, dust twice, then frame numbering.
+
+## Build and run
+
+Requirements: JDK 25 and Maven. Maven downloads the dependencies declared in `pom.xml` on the first build.
+
+From PowerShell in the project directory:
+
+```powershell
+mvn.cmd validate
+mvn.cmd compile
+mvn.cmd test
+mvn.cmd package
+mvn.cmd javafx:run "-Djavafx.args=sample.mp4 --number-frames --bleed-frames"
+```
+
+Replace `sample.mp4` with the path to a local video file. The optional runnable shaded JAR is built with:
+
+```powershell
+mvn.cmd -Pfat-jar package
+java -jar target/VideoPlayerSingleThread-0.1-all.jar sample.mp4 --number-frames
+```
+
+On macOS or Linux, use `mvn` instead of `mvn.cmd`.
+
+## Tests and diagnostics
+
+Run the automated regression tests with `mvn.cmd test` (or `mvn test`). The tests in `src/test/java/comp3011/CommandLineControllerTest.java` check the exact help text, all short and long effect options, processor creation, order and repetitions, mixed option forms, existing launch flags, and unknown options. Maven's standard test source directory is `src/test/java`.
+
+To print per-stage timings while playing a video, set `VIDEOPLAYER_PROFILE=true` before launching. In PowerShell:
+
+```powershell
+$env:VIDEOPLAYER_PROFILE = 'true'
+mvn.cmd javafx:run "-Djavafx.args=sample.mp4 -sfwyvdjmbp --number-frames"
+```
+
+The profiler reports frame rate and average time for decode, audio copying, effects, conversion, and each effect over five-second windows. For a performance comparison, use the same TITAN activity, video, and effect sequence for this player and the supplied reference; results vary with machine load.
+
+### Recorded TITAN result
+
+The latest result shown on the TITAN dashboard for this submission was **performance 347%**, **startup speed 96%**, and **use of cores 661%**. These are measurements from that run, not a guarantee for every machine or workload.
+
+## Project layout
+
+```text
+pom.xml                         Maven dependencies and build configuration
+src/main/java/comp3011/         Application, UI, model, effects, and worker messages
+src/test/java/comp3011/         JUnit regression tests
+```

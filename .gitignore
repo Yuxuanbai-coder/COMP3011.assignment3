@@ -1,0 +1,30 @@
+# Build output and IDE/workspace files
+**/target/
+**/build/
+**/.metadata/
+**/.settings/
+**/.tools/
+**/.project
+**/.classpath
+**/.factorypath
+**/.springBeans
+**/.sts4-cache/
+**/.idea/
+**/.vscode/
+*.class
+*.log
+
+# Local credentials, keys, and media
+.env
+.env.*
+!.env.example
+key.txt
+*.pem
+*.key
+*.p12
+*.jks
+*.mp3
+*.mp4
+*.wav
+*.mov
+*.mkv
