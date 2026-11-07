@@ -19,6 +19,7 @@ import java.util.function.Supplier;
  * occurrence, so repeated options remain separate stages in the effect sequence.</p>
  */
 public enum FrameProcessorOption {
+    SUBTITLE_FRAMES('S', "--subtitle-frames", FrameSubtitler::new),
     NUMBER_FRAMES('n', "--number-frames", FrameNumberer::new),
     SCRATCH_FRAMES('s', "--scratch-frames", FrameScratcher::new),
     FLICKER_FRAMES('f', "--flicker-frames", FrameFlickerer::new),
@@ -30,6 +31,7 @@ public enum FrameProcessorOption {
     MOTTLE_FRAMES('m', "--mottle-frames", FrameMottler::new),
     BLEED_FRAMES('b', "--bleed-frames", FrameBleeder::new),
     PEPPER_FRAMES('p', "--pepper-frames", FramePepperer::new);
+    
 
     private final char shortName;
     private final String longName;
