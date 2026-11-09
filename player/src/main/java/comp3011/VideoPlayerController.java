@@ -54,6 +54,8 @@ public class VideoPlayerController {
         view.getStopButton().setOnAction(_ -> stopAndExit());
         view.getAudioButton().setOnAction(_ -> toggleAudioOutput());
         view.showAudioEnabled(model.isAudioOutputEnabled());
+        view.getSubtitleButton().setOnAction(_ -> toggleSubtitles());
+        view.showSubtitlesEnabled(model.areSubtitlesEnabled());
     }
 
     public void installKeyboardShortcuts(Scene scene) {
@@ -75,6 +77,9 @@ public class VideoPlayerController {
                 event.consume();
             } else if (event.getCode() == KeyCode.A) {
                 toggleAudioOutput();
+                event.consume();
+            } else if (event.getCode() == KeyCode.S) {
+                toggleSubtitles();
                 event.consume();
             }
         });
@@ -141,4 +146,11 @@ public class VideoPlayerController {
     private void onAudioOutputStateChanged(boolean audioOutputEnabled) {
         view.showAudioEnabled(audioOutputEnabled);
     }
+
+    private void toggleSubtitles(){
+        model.toggleSubtitles();
+        System.out.println("Subtitles enabled: " + model.areSubtitlesEnabled());
+        view.showSubtitlesEnabled(model.areSubtitlesEnabled());
+    }
+
 }

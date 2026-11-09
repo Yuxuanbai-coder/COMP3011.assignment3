@@ -9,11 +9,24 @@ import org.bytedeco.opencv.opencv_core.Scalar;
 import static org.bytedeco.opencv.global.opencv_imgproc.FONT_HERSHEY_SIMPLEX;
 import static org.bytedeco.opencv.global.opencv_imgproc.LINE_AA;
 import static org.bytedeco.opencv.global.opencv_imgproc.putText;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 
 public class FrameSubtitler extends FrameProcessor{
+
+    private final AtomicBoolean subtitlesEnabled;
+
+    public FrameSubtitler() {
+        this(new AtomicBoolean(true));
+    }
+
+    public FrameSubtitler(AtomicBoolean subtitlesEnabled) {
+        this.subtitlesEnabled = subtitlesEnabled;
+    }
+
     @Override 
     public void process(Frame frame, InfoFrame info) throws Exception{
-        if(frame == null || frame.image == null){
+        if(frame == null || frame.image == null || !subtitlesEnabled.get()){
             return ;
         }
         long timeUs = info.timestampUs();

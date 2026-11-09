@@ -12,6 +12,7 @@ package comp3011;
 
 import java.io.File;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -73,6 +74,8 @@ public class VideoPlayerModel {
     private final Consumer<String> statusChangedHandler;
     private final BiConsumer<Boolean, Boolean> playbackStateChangedHandler;
     private final Consumer<Boolean> audioOutputStateChangedHandler;
+    private final AtomicBoolean subtitlesEnabled;
+    
 
     // This is the critical wiring that allows the framework (JavaFX) to call
     // into our model logic every time it goes around its event loop. Every GUI
@@ -131,9 +134,24 @@ public class VideoPlayerModel {
         this.playbackStateChangedHandler = playbackStateChangedHandler;
         this.audioOutputStateChangedHandler = audioOutputStateChangedHandler;
         // The model owns the processor instances; mapping the ordered selections here preserves order and repetitions.
-        this.frameProcessors = frameProcessorOptions.stream()
-                .map(FrameProcessorOption::createProcessor)
-                .toList();
+        subtitlesEnabled = new AtomicBoolean(
+        frameProcessorOptions.contains(FrameProcessorOption.SUBTITLE_FRAMES));
+
+        List<FrameProcessor> processors = new ArrayList<>();
+
+        for (FrameProcessorOption option : frameProcessorOptions) {
+            if (option == FrameProcessorOption.SUBTITLE_FRAMES) {
+                processors.add(new FrameSubtitler(subtitlesEnabled));
+            } else {
+                processors.add(option.createProcessor());
+            }
+        }
+
+        if (!frameProcessorOptions.contains(FrameProcessorOption.SUBTITLE_FRAMES)) {
+            processors.add(new FrameSubtitler(subtitlesEnabled));
+        }
+
+        this.frameProcessors = List.copyOf(processors);
         playbackProfiler = new PlaybackProfiler(this.frameProcessors);
 
         audioOutputWorker = new Thread(this::runAudioOutputWorker, "video-audio-output-worker");
@@ -176,6 +194,14 @@ public class VideoPlayerModel {
 
     public void stopPlayback() {
         enqueueCommand(PlaybackCommand.Stop.INSTANCE);
+    }
+
+    public void toggleSubtitles() {
+        subtitlesEnabled.set(!subtitlesEnabled.get());
+    }
+
+    public boolean areSubtitlesEnabled() {
+        return subtitlesEnabled.get();
     }
 
     /** Requests both workers to stop; each worker closes the native resources it exclusively owns. */
