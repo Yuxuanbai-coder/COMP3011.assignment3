@@ -75,6 +75,11 @@ public class VideoPlayerModel {
     private final BiConsumer<Boolean, Boolean> playbackStateChangedHandler;
     private final Consumer<Boolean> audioOutputStateChangedHandler;
     private final AtomicBoolean subtitlesEnabled;
+    private final AtomicReference<List<SubtitleSegment>> subtitleSegments =
+        new AtomicReference<>(List.of(
+                new SubtitleSegment(2.0, 5.0, "Hello A3"),
+                new SubtitleSegment(5.0, 8.0, "Second subtitle")
+        ));
     
 
     // This is the critical wiring that allows the framework (JavaFX) to call
@@ -141,14 +146,14 @@ public class VideoPlayerModel {
 
         for (FrameProcessorOption option : frameProcessorOptions) {
             if (option == FrameProcessorOption.SUBTITLE_FRAMES) {
-                processors.add(new FrameSubtitler(subtitlesEnabled));
+                processors.add(new FrameSubtitler(subtitlesEnabled, subtitleSegments));
             } else {
                 processors.add(option.createProcessor());
             }
         }
 
         if (!frameProcessorOptions.contains(FrameProcessorOption.SUBTITLE_FRAMES)) {
-            processors.add(new FrameSubtitler(subtitlesEnabled));
+            processors.add(new FrameSubtitler(subtitlesEnabled, subtitleSegments));
         }
 
         this.frameProcessors = List.copyOf(processors);
