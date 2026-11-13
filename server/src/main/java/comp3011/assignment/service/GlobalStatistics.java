@@ -1,5 +1,6 @@
 package comp3011.assignment.service;
 
+import java.util.concurrent.atomic.DoubleAdder;
 import java.util.concurrent.atomic.LongAdder;
 
 import org.springframework.stereotype.Service;
@@ -19,6 +20,7 @@ public class GlobalStatistics {
 
     private final LongAdder inputTokens = new LongAdder();
     private final LongAdder outputTokens = new LongAdder();
+    private final DoubleAdder transcriptionSeconds = new DoubleAdder();
 
     /**
      * Adds one transcription request's token usage to the cumulative totals.
@@ -35,6 +37,14 @@ public class GlobalStatistics {
         outputTokens.add(outputTokenCount);
     }
 
+    public void addTranscriptionSeconds(double seconds) {
+        if (!Double.isFinite(seconds) || seconds < 0) {
+            throw new IllegalArgumentException("Invalid transcription usage");
+        }
+
+        transcriptionSeconds.add(seconds);
+    }
+
     /**
      * Reads a point-in-time view of the current counters.
      *
@@ -42,5 +52,8 @@ public class GlobalStatistics {
      */
     public GlobalStatsResponse snapshot() {
         return new GlobalStatsResponse(inputTokens.sum(), outputTokens.sum());
+    }
+    public double getTranscriptionSeconds() {
+        return transcriptionSeconds.sum();
     }
 }

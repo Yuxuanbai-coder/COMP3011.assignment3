@@ -22,14 +22,16 @@ public class SubtitleService {
     private final RestClient restClient;
     private final String apiKey;
     private final String transcriptionUrl;
+    private final GlobalStatistics globalStatistics;
 
     public SubtitleService(
             RestClient transcriptionRestClient,
             @Value("${OPENAI_API_KEY:}") String apiKey,
-            @Value("${openai.transcription-url}") String transcriptionUrl) {
+            @Value("${openai.transcription-url}") String transcriptionUrl, GlobalStatistics globalStatistics) {
         this.restClient = transcriptionRestClient;
         this.apiKey = apiKey;
         this.transcriptionUrl = transcriptionUrl;
+        this.globalStatistics = globalStatistics;
 }
     
 
@@ -59,6 +61,15 @@ public class SubtitleService {
         if (response == null) {
             throw new IllegalStateException("Transcription response is empty");
         }
+
+        WhisperUsage usage = response.usage();
+
+        if (usage == null || usage.seconds() == null
+                || !"duration".equals(usage.type())) {
+            throw new IllegalStateException("Transcription usage is unavailable");
+        }
+
+        globalStatistics.addTranscriptionSeconds(usage.seconds());
 
         List<WhisperSegment> whisperSegments = response.segments() == null ? List.of() : response.segments();
 

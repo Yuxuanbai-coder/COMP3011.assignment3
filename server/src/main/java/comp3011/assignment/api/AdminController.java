@@ -82,4 +82,9 @@ public class AdminController {
     public GlobalStatsResponse getGlobalStats() {
         return globalStatistics.snapshot();
     }
+
+    @GetMapping("/api/v1/global/usage")
+    public UsageResponse getGlobalUsage() {
+        return new UsageResponse(globalStatistics.getTranscriptionSeconds());
+    }
 }
