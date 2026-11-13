@@ -61,7 +61,7 @@ public class FrameSubtitler extends FrameProcessor{
                 FONT_HERSHEY_SIMPLEX, 1.0, black, 5, LINE_AA, false);
 
                 putText(image, text, position,
-                FONT_HERSHEY_SIMPLEX, 1.0, white, 5, LINE_AA, false);
+                FONT_HERSHEY_SIMPLEX, 1.0, white, 2, LINE_AA, false);
             }
 
         }
