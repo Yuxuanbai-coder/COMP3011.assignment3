@@ -8,8 +8,12 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 public class SubtitleClient {
 
@@ -18,6 +22,7 @@ public class SubtitleClient {
             .build();
 
     private final URI endpoint;
+    private final ObjectMapper mapper = JsonMapper.builder().build();
 
     public SubtitleClient() {
         this(URI.create("http://localhost:8080/api/v1/subtitles"));
@@ -26,6 +31,22 @@ public class SubtitleClient {
     public SubtitleClient(URI endpoint) {
         this.endpoint = endpoint;
     }
+
+    public CompletableFuture<List<SubtitleSegment>> requestSubtitles(Path audioFile)
+        throws IOException {
+
+        return sendM4a(audioFile).thenApply(json -> {
+                SubtitleResponse response =
+                        mapper.readValue(json, SubtitleResponse.class);
+
+                if (response == null || response.segments() == null) {
+                throw new IllegalStateException(
+                        "Missing segments in subtitle response");
+                }
+
+                return List.copyOf(response.segments());
+        });
+      }
 
     public CompletableFuture<String> sendM4a(Path audioFile) throws IOException {
         String boundary = "----subtitle-" + UUID.randomUUID();
