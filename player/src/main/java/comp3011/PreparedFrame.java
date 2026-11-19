@@ -6,28 +6,22 @@
  */
 package comp3011;
 
-import javafx.scene.image.Image;
-
 /**
- * A display-ready frame and its timing metadata, transferred to the JavaFX thread.
+ * Prepared pixels and their timing metadata, transferred to the JavaFX thread.
  */
 record PreparedFrame(
         long playbackGeneration,
-        Image image,
+        byte[] pixels,
+        int width,
+        int height,
         int frameNumber,
         long mediaTimestampUs,
         long logicalTimestampUs,
         long targetTimeNs,
         long preparedAtNs) {
 
-    /** Keeps the current single-threaded playback path source-compatible during the staged refactor. */
-    PreparedFrame(
-            Image image,
-            int frameNumber,
-            long mediaTimestampUs,
-            long logicalTimestampUs,
-            long targetTimeNs,
-            long preparedAtNs) {
-        this(0, image, frameNumber, mediaTimestampUs, logicalTimestampUs, targetTimeNs, preparedAtNs);
+    PreparedFrame delayedBy(long pauseDurationNs) {
+        return new PreparedFrame(playbackGeneration, pixels, width, height, frameNumber, mediaTimestampUs,
+                logicalTimestampUs, targetTimeNs + pauseDurationNs, preparedAtNs + pauseDurationNs);
     }
 }

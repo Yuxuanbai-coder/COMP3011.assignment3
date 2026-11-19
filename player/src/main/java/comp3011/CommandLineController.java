@@ -178,6 +178,7 @@ public class CommandLineController {
         System.out.println("  -x, --maximise     Open the player maximised");
         System.out.println("  -1, --monitor-1    Open the player on display 1");
         System.out.println("  -2, --monitor-2    Open the player on display 2");
+        System.out.println("  -S, --subtitle-frames  Enable speech-to-text subtitles on startup");
         System.out.println();
         System.out.println("Frame processors:");
         printFrameProcessorOption("-n, --number-frames", "Render the frame number onto each frame");

@@ -10,6 +10,9 @@ package comp3011;
  * Immutable notifications sent from the playback worker to the JavaFX thread.
  */
 sealed interface PlaybackEvent {
+    record PausedFrameReady(PreparedFrame frame) implements PlaybackEvent {
+    }
+
     enum FrameCleared implements PlaybackEvent {
         INSTANCE
     }

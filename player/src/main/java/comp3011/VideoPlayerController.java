@@ -45,7 +45,9 @@ public class VideoPlayerController {
                 this::onFrameReady,
                 this::onStatusChanged,
                 this::onPlaybackStateChanged,
-                this::onAudioOutputStateChanged);
+                this::onAudioOutputStateChanged,
+                view::setSubtitleText,
+                new SubtitleLoader());
 
         view.getStartOverButton().setOnAction(_ -> startOver());
         view.getBackFiveButton().setOnAction(_ -> backFiveSeconds());

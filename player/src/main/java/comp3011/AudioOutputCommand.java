@@ -16,7 +16,7 @@ sealed interface AudioOutputCommand {
     record Reset(long playbackGeneration) implements AudioOutputCommand {
     }
 
-    /** Flushes queued sound after pause or mute without changing the playback generation. */
+    /** Flushes queued sound when toggling mute without changing the playback generation. */
     record Flush(long playbackGeneration) implements AudioOutputCommand {
     }
 

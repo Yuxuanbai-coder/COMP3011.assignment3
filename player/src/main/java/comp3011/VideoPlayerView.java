@@ -10,6 +10,7 @@
  */
 package comp3011;
 
+import javafx.geometry.Bounds;
 import javafx.geometry.Insets;
 import javafx.geometry.Point2D;
 import javafx.geometry.Pos;
@@ -30,6 +31,11 @@ import javafx.scene.shape.Line;
 import javafx.scene.shape.Polygon;
 import javafx.scene.shape.SVGPath;
 import javafx.scene.shape.StrokeLineCap;
+import javafx.scene.shape.StrokeType;
+import javafx.scene.text.Font;
+import javafx.scene.text.FontWeight;
+import javafx.scene.text.Text;
+import javafx.scene.text.TextAlignment;
 
 /**
  * The view part of the video player model-view-controller architecture.
@@ -46,6 +52,7 @@ public class VideoPlayerView {
     private static final int ICON_SIZE = 28;
 
     private final ImageView imageView = new ImageView();
+    private final Text subtitleText = new Text();
     private final Label statusLabel = new Label("No video loaded");
     private final Label tooltipLabel = new Label();
     private final Pane tooltipLayer = new Pane();
@@ -63,12 +70,13 @@ public class VideoPlayerView {
         imageView.setPreserveRatio(true);
         imageView.setSmooth(false);
 
-        videoPane = new StackPane(imageView);
+        videoPane = new StackPane(imageView, subtitleText);
         videoPane.setStyle("-fx-background-color: black;");
         videoPane.setMinSize(0, 0);
         videoPane.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
         imageView.fitWidthProperty().bind(videoPane.widthProperty());
         imageView.fitHeightProperty().bind(videoPane.heightProperty());
+        configureSubtitles();
 
         startOverButton = iconButton(createLoopIcon(false, null));
         backFiveButton = iconButton(createLoopIcon(false, "5"));
@@ -140,6 +148,46 @@ public class VideoPlayerView {
 
     public void setImage(Image image) {
         imageView.setImage(image);
+    }
+
+    public void setSubtitleText(String text) {
+        subtitleText.setText(text);
+        layoutSubtitle();
+    }
+
+    private void configureSubtitles() {
+        subtitleText.setId("subtitle-text");
+        subtitleText.setManaged(false);
+        subtitleText.setMouseTransparent(true);
+        subtitleText.setVisible(false);
+        subtitleText.setFill(Color.WHITE);
+        subtitleText.setStroke(Color.BLACK);
+        subtitleText.setStrokeType(StrokeType.OUTSIDE);
+        subtitleText.setTextAlignment(TextAlignment.CENTER);
+        subtitleText.setFont(Font.font("SansSerif", FontWeight.BOLD, 12));
+        imageView.boundsInParentProperty().addListener((_, _, _) -> layoutSubtitle());
+    }
+
+    private void layoutSubtitle() {
+        Bounds video = imageView.getBoundsInParent();
+        if (subtitleText.getText().isEmpty() || imageView.getImage() == null
+                || video.getWidth() <= 0 || video.getHeight() <= 0) {
+            subtitleText.setVisible(false);
+            return;
+        }
+
+        double size = Math.clamp(video.getHeight() * 0.052, 12, 60);
+        if (size != subtitleText.getFont().getSize()) {
+            subtitleText.setFont(Font.font("SansSerif", FontWeight.BOLD, size));
+        }
+        subtitleText.setStrokeWidth(size / 12);
+        Bounds text = subtitleText.getLayoutBounds();
+        double scale = Math.min(1, video.getWidth() * 0.9 / text.getWidth());
+        subtitleText.setScaleX(scale);
+        subtitleText.setScaleY(scale);
+        subtitleText.relocate(video.getMinX() + (video.getWidth() - text.getWidth()) / 2,
+                video.getMaxY() - video.getHeight() * 0.07 - text.getHeight() * (1 + scale) / 2);
+        subtitleText.setVisible(true);
     }
 
     public void setVideoDisplaySize(double width, double height) {

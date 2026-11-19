@@ -1,8 +1,7 @@
 package comp3011;
 
-import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongFunction;
 
 import org.bytedeco.javacv.Frame;
 import org.bytedeco.javacv.OpenCVFrameConverter;
@@ -14,38 +13,33 @@ import org.bytedeco.opencv.opencv_core.Point;
 import org.bytedeco.opencv.opencv_core.Scalar;
 
 
-public class FrameSubtitler extends FrameProcessor{
+public class FrameSubtitler extends FrameProcessor {
 
     private final AtomicBoolean subtitlesEnabled;
-    private final AtomicReference<List<SubtitleSegment>> subtitleSegments;
+    private final LongFunction<String> subtitleTextAt;
 
     public FrameSubtitler() {
-        this(new AtomicBoolean(true), new AtomicReference<>(List.of()));
+        this(new AtomicBoolean(true), _ -> "");
     }
 
     public FrameSubtitler(
             AtomicBoolean subtitlesEnabled,
-            AtomicReference<List<SubtitleSegment>> subtitleSegments) {
+            LongFunction<String> subtitleTextAt) {
         this.subtitlesEnabled = subtitlesEnabled;
-        this.subtitleSegments = subtitleSegments;
+        this.subtitleTextAt = subtitleTextAt;
     }
 
-    @Override 
-    public void process(Frame frame, InfoFrame info) throws Exception{
-        if(frame == null || frame.image == null || !subtitlesEnabled.get()){
-            return ;
-        }
-        double timeSeconds = info.timestampUs() / 1_000_000.0;
-        String text = null;
+    String textAt(long timestampUs) {
+        return timestampUs >= 0 && subtitlesEnabled.get() ? subtitleTextAt.apply(timestampUs) : "";
+    }
 
-        for (SubtitleSegment segment : subtitleSegments.get()) {
-            if (timeSeconds >= segment.start() && timeSeconds < segment.end()) {
-                text = segment.text();
-                break;
-            }
+    @Override
+    public void process(Frame frame, InfoFrame info) {
+        if (frame == null || frame.image == null) {
+            return;
         }
-
-        if (text == null || text.isBlank()) {
+        String text = textAt(info.timestampUs());
+        if (text.isBlank()) {
             return;
         }
 
@@ -57,13 +51,15 @@ public class FrameSubtitler extends FrameProcessor{
             Mat image = converter.convert(frame);
 
             if (image != null) {
-                putText(image, text, position,
-                FONT_HERSHEY_SIMPLEX, 1.0, black, 5, LINE_AA, false);
-
-                putText(image, text, position,
-                FONT_HERSHEY_SIMPLEX, 1.0, white, 2, LINE_AA, false);
+                String[] lines = text.split("\n");
+                position.y(position.y() - 37 * (lines.length - 1));
+                for (String line : lines) {
+                    putText(image, line, position, FONT_HERSHEY_SIMPLEX, 1.0, black, 5, LINE_AA, false);
+                    putText(image, line, position, FONT_HERSHEY_SIMPLEX, 1.0, white, 2, LINE_AA, false);
+                    position.y(position.y() + 37);
+                }
             }
 
         }
-   }
+    }
 }

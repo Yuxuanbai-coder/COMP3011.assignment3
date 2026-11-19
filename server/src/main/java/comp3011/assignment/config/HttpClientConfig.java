@@ -32,7 +32,7 @@ public class HttpClientConfig {
 
         JdkClientHttpRequestFactory requestFactory =
                 new JdkClientHttpRequestFactory(httpClient);
-        requestFactory.setReadTimeout(Duration.ofSeconds(5));
+        requestFactory.setReadTimeout(Duration.ofSeconds(25));
 
         return restClientBuilder
                 .requestFactory(requestFactory)

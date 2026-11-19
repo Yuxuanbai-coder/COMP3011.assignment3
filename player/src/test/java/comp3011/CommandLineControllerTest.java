@@ -52,6 +52,7 @@ class CommandLineControllerTest {
     @Test
     void parsesEveryShortAndLongEffectOptionAndCreatesItsProcessor() {
         List<EffectOptionCase> cases = List.of(
+                new EffectOptionCase("-S", "--subtitle-frames", FrameProcessorOption.SUBTITLE_FRAMES, FrameSubtitler.class),
                 new EffectOptionCase("-n", "--number-frames", FrameProcessorOption.NUMBER_FRAMES, FrameNumberer.class),
                 new EffectOptionCase("-s", "--scratch-frames", FrameProcessorOption.SCRATCH_FRAMES, FrameScratcher.class),
                 new EffectOptionCase("-f", "--flicker-frames", FrameProcessorOption.FLICKER_FRAMES, FrameFlickerer.class),
@@ -166,6 +167,7 @@ class CommandLineControllerTest {
                 "  -x, --maximise     Open the player maximised",
                 "  -1, --monitor-1    Open the player on display 1",
                 "  -2, --monitor-2    Open the player on display 2",
+                "  -S, --subtitle-frames  Enable speech-to-text subtitles on startup",
                 "",
                 "Frame processors:",
                 "  -n, --number-frames    Render the frame number onto each frame",

@@ -37,6 +37,7 @@ public class AudioPlayer implements AutoCloseable {
     private static final int AUDIO_WARMUP_BYTES = 4096;
 
     private SourceDataLine line; // Java Sound's audio-output interface - for us a destination, not a source.
+    private boolean paused;
 
     public void open(int sampleRate, int channels) throws LineUnavailableException {
         if (sampleRate <= 0 || channels <= 0) {
@@ -46,6 +47,7 @@ public class AudioPlayer implements AutoCloseable {
         AudioFormat format = new AudioFormat(sampleRate, 16, channels, true, false);
         line = AudioSystem.getSourceDataLine(format);
         line.open(format);
+        paused = false;
         line.start();
         warmUpLine();
     }
@@ -127,6 +129,19 @@ public class AudioPlayer implements AutoCloseable {
                     availableBeforeWrite);
         }
         return written;
+    }
+
+    /** Changes playback state while leaving unplayed samples in the device buffer. */
+    public void setPaused(boolean paused) {
+        if (line == null || this.paused == paused) {
+            return;
+        }
+        if (paused) {
+            line.stop();
+        } else {
+            line.start();
+        }
+        this.paused = paused;
     }
 
     public void flush() {
