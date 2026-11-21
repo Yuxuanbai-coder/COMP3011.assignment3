@@ -27,7 +27,7 @@ class SubtitleServiceTest {
         RestClient.Builder builder = RestClient.builder();
         MockRestServiceServer upstream = MockRestServiceServer.bindTo(builder).build();
         GlobalStatistics usage = new GlobalStatistics();
-        SubtitleService service = new SubtitleService(builder.build(), "test-key", url, "en", usage);
+        SubtitleService service = new SubtitleService(builder.build(), "test-key", url, usage);
 
         upstream.expect(requestTo(url)).andExpect(method(HttpMethod.POST))
                 .andExpect(content().string(allOf(containsString("filename=\"clip.flac\""),

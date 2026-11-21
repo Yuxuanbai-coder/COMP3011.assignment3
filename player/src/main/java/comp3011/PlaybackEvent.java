@@ -21,7 +21,7 @@ sealed interface PlaybackEvent {
         INSTANCE
     }
 
-    record VideoSizeChanged(int width, int height) implements PlaybackEvent {
+    record MediaOpened(int width, int height, long durationUs) implements PlaybackEvent {
     }
 
     record StatusChanged(String status) implements PlaybackEvent {

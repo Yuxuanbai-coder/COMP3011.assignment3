@@ -11,6 +11,7 @@
 package comp3011;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,6 +30,10 @@ import org.bytedeco.javacv.Frame;
 import org.bytedeco.javacv.FrameGrabber;
 
 import javafx.animation.AnimationTimer;
+import javafx.beans.property.ReadOnlyLongProperty;
+import javafx.beans.property.ReadOnlyLongWrapper;
+import javafx.beans.property.ReadOnlyObjectProperty;
+import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.scene.image.Image;
 import javafx.scene.image.PixelFormat;
 import javafx.scene.image.WritableImage;
@@ -82,8 +87,13 @@ public class VideoPlayerModel {
     private final AtomicBoolean subtitlesEnabled;
     private final SubtitleLoader subtitleLoader;
     private final FrameSubtitler subtitler;
-    // Only the JavaFX thread reads or updates the visible frame's subtitle.
-    private long displayedMediaTimestampUs = NO_SEEK_REQUEST;
+    // Only the JavaFX thread reads or updates the visible frame's position and subtitle.
+    private final ReadOnlyLongWrapper displayedMediaTimestampUs = new ReadOnlyLongWrapper(NO_SEEK_REQUEST);
+    private final ReadOnlyLongWrapper displayedDurationUs = new ReadOnlyLongWrapper(NO_SEEK_REQUEST);
+    private final ReadOnlyObjectWrapper<SubtitleLoader.Progress> subtitleProgress =
+            new ReadOnlyObjectWrapper<>(new SubtitleLoader.Progress(SubtitleLoader.State.OFF, 0, 0));
+    private boolean waitingForSubtitles;
+    private long requestedSubtitleVersion;
     private String displayedSubtitleText = "";
     private WritableImage displayImage;
     private long displayImageGeneration;
@@ -108,7 +118,8 @@ public class VideoPlayerModel {
     private volatile boolean shutdownRequested;
 
     // The fields below are owned by playbackWorker and are not read by the UI thread.
-    private File videoFile; // Path to the media that comes from the command line
+    private File videoFile;
+    private long subtitleVersion;
     private FFmpegFrameGrabber grabber; // This is the 3rd party video media decoder. It deals in JavaCV Frame objects.
     private boolean playbackOpen; // True when playback is happening.
     private boolean pauseRequested;
@@ -123,6 +134,7 @@ public class VideoPlayerModel {
     private int intFrameRate;
     private int totalVideoFrames;
     private long firstTimestampUs = NO_SEEK_REQUEST;
+    private long earliestSeekFrameUs = NO_SEEK_REQUEST;
     private long logicalPlaybackBaseUs;
     private long playbackStartNs;
     private long pauseStartedNs;
@@ -173,13 +185,36 @@ public class VideoPlayerModel {
     }
 
     public void play(File file) {
-        subtitleLoader.setVideo(file);
-        subtitleLoader.setEnabled(subtitlesEnabled.get());
-        enqueueCommand(new PlaybackCommand.Play(file));
+        displayedDurationUs.set(NO_SEEK_REQUEST);
+        requestedSubtitleVersion = subtitleLoader.setVideo(file);
+        waitingForSubtitles = subtitlesEnabled.get();
+        subtitleLoader.setEnabled(waitingForSubtitles);
+        enqueueCommand(new PlaybackCommand.Play(file, requestedSubtitleVersion, waitingForSubtitles));
+    }
+
+    void playWithSubtitles(File file) {
+        subtitlesEnabled.set(true);
+        play(file);
     }
 
     public void startOver() {
-        enqueueCommand(new PlaybackCommand.SeekTo(0));
+        seekToPosition(0);
+    }
+
+    public void seekToPosition(long timestampUs) {
+        enqueueCommand(new PlaybackCommand.SeekTo(timestampUs));
+    }
+
+    ReadOnlyLongProperty displayedMediaTimestampUsProperty() {
+        return displayedMediaTimestampUs.getReadOnlyProperty();
+    }
+
+    ReadOnlyLongProperty displayedDurationUsProperty() {
+        return displayedDurationUs.getReadOnlyProperty();
+    }
+
+    ReadOnlyObjectProperty<SubtitleLoader.Progress> subtitleProgressProperty() {
+        return subtitleProgress.getReadOnlyProperty();
     }
 
     public void backFiveSeconds() {
@@ -191,6 +226,7 @@ public class VideoPlayerModel {
     }
 
     public void togglePause() {
+        waitingForSubtitles = false;
         enqueueCommand(PlaybackCommand.TogglePause.INSTANCE);
     }
 
@@ -203,6 +239,7 @@ public class VideoPlayerModel {
     }
 
     public void stopPlayback() {
+        waitingForSubtitles = false;
         enqueueCommand(PlaybackCommand.Stop.INSTANCE);
     }
 
@@ -210,6 +247,9 @@ public class VideoPlayerModel {
         boolean enabled = !subtitlesEnabled.get();
         subtitlesEnabled.set(enabled);
         subtitleLoader.setEnabled(enabled);
+        if (!enabled) {
+            resumeAfterSubtitlePreparation();
+        }
         refreshSubtitle();
     }
 
@@ -279,10 +319,15 @@ public class VideoPlayerModel {
     private void handlePlaybackCommand(PlaybackCommand command) {
         if (command instanceof PlaybackCommand.Play playCommand) {
             videoFile = playCommand.file();
+            subtitleVersion = playCommand.subtitleVersion();
             videoDurationUs = NO_SEEK_REQUEST;
             videoFrameDurationUs = 0;
             currentTimestampUs = 0;
-            startPlayback(0, false, NO_SEEK_REQUEST);
+            startPlayback(0, playCommand.prepareSubtitles(), NO_SEEK_REQUEST);
+        } else if (command instanceof PlaybackCommand.ResumePrepared resume) {
+            if (resume.subtitleVersion() == subtitleVersion && playbackOpen && pauseRequested) {
+                togglePauseOnPlaybackWorker();
+            }
         } else if (command instanceof PlaybackCommand.SeekTo seekCommand) {
             if (videoFile != null) {
                 seekTo(seekCommand.timestampUs());
@@ -372,11 +417,9 @@ public class VideoPlayerModel {
             audioPackets.clear();
             audioClock.set(new AudioClock(playbackGeneration, NO_SEEK_REQUEST, 0, true, false));
             audioOutputCommands.offer(new AudioOutputCommand.Reset(playbackGeneration));
-            if (!pauseRequested) {
-                notifyFrameCleared();
-            }
+            // Retain the visible frame until the decoder has a replacement for the new position.
             grabber.setTimestamp(grabTimestampUs);
-            resetPlaybackClock(logicalTimestampUs);
+            resetPlaybackClock(logicalTimestampUs, grabTimestampUs);
             prepareNextFrame();
             notifyPlaybackStateChanged();
         } catch (Exception e) {
@@ -402,7 +445,7 @@ public class VideoPlayerModel {
 
         try {
             openPlaybackResources(startTimestampUs);
-            resetPlaybackClock(currentTimestampUs);
+            resetPlaybackClock(currentTimestampUs, startTimestampUs);
             playbackOpen = true;
             prepareNextFrame();
             notifyPlaybackStateChanged();
@@ -417,9 +460,10 @@ public class VideoPlayerModel {
         grabber.setImageMode(FrameGrabber.ImageMode.COLOR);
         grabber.setSampleMode(FrameGrabber.SampleMode.SHORT);
         grabber.start();
+        if (!grabber.hasVideo()) {
+            throw new IOException("The selected file does not contain a video track");
+        }
         mediaStartUs = AudioExtractor.mediaStartUs(grabber);
-
-        notifyVideoSizeChanged(grabber.getImageWidth(), grabber.getImageHeight());
 
         frameRate = grabber.getFrameRate();
         intFrameRate = (int) Math.round(frameRate);
@@ -432,9 +476,11 @@ public class VideoPlayerModel {
         videoDurationUs = durationUs > 0
                 ? durationUs
                 : NO_SEEK_REQUEST;
+        playbackEvents.offer(new PlaybackEvent.MediaOpened(grabber.getImageWidth(), grabber.getImageHeight(),
+                videoDurationUs));
 
         audioAvailable = grabber.hasAudio();
-        subtitleLoader.mediaOpened(videoFile, audioAvailable, videoDurationUs);
+        subtitleLoader.mediaOpened(subtitleVersion, audioAvailable, videoDurationUs);
         if (audioAvailable) {
             audioOutputOpenRequested = true;
             audioOutputCommands.offer(new AudioOutputCommand.Open(
@@ -449,13 +495,16 @@ public class VideoPlayerModel {
     }
 
     /** Clears queued work and establishes a new logical timestamp anchor for both video and audio. */
-    private void resetPlaybackClock(long logicalTimestampUs) {
+    private void resetPlaybackClock(long logicalTimestampUs, long seekTimestampUs) {
         discardPreparedFrames();
         audioPackets.clear();
         currentTimestampUs = logicalTimestampUs;
         displayedTimestampUs.set(logicalTimestampUs);
         relativeSeekBaseUs.set(logicalTimestampUs);
         firstTimestampUs = NO_SEEK_REQUEST;
+        earliestSeekFrameUs = seekTimestampUs > 0
+                ? Math.max(0, seekTimestampUs - videoFrameDurationUs)
+                : NO_SEEK_REQUEST;
         logicalPlaybackBaseUs = logicalTimestampUs;
         playbackStartNs = 0;
         pauseStartedNs = pauseRequested ? System.nanoTime() : 0;
@@ -519,6 +568,13 @@ public class VideoPlayerModel {
                 playbackProfiler.recordDecode(System.nanoTime() - decodeStartedNs);
             }
             if (frame == null) {
+                if (earliestSeekFrameUs != NO_SEEK_REQUEST) {
+                    // A file can continue with audio after its final picture. Fall back to the nearest decoded area.
+                    earliestSeekFrameUs = NO_SEEK_REQUEST;
+                    audioPackets.clear();
+                    grabber.setTimestamp(displayableSeekTimestamp(logicalPlaybackBaseUs));
+                    continue;
+                }
                 finishPlayback();
                 return null;
             }
@@ -531,6 +587,12 @@ public class VideoPlayerModel {
             if (frame.image == null) {
                 continue;
             }
+            long mediaTimestampUs = Math.max(0, timestampUs - mediaStartUs);
+            if (mediaTimestampUs < earliestSeekFrameUs) {
+                // A seek can reach the audio target while decoded video still trails by several frames.
+                continue;
+            }
+            earliestSeekFrameUs = NO_SEEK_REQUEST;
 
             if (!frameProcessorsInitialised) {
                 initialiseFrameProcessors(new InfoVideo(
@@ -578,7 +640,7 @@ public class VideoPlayerModel {
                     frame.imageWidth,
                     frame.imageHeight,
                     frameNumber,
-                    Math.max(0, timestampUs - mediaStartUs),
+                    mediaTimestampUs,
                     logicalTimestampUs,
                     targetTimeNs,
                     System.nanoTime());
@@ -662,8 +724,9 @@ public class VideoPlayerModel {
     private void drainPlaybackEvents() {
         PlaybackEvent event;
         while ((event = playbackEvents.poll()) != null) {
-            if (event instanceof PlaybackEvent.VideoSizeChanged sizeChanged) {
-                videoSizeChangedHandler.accept(sizeChanged.width(), sizeChanged.height());
+            if (event instanceof PlaybackEvent.MediaOpened media) {
+                displayedDurationUs.set(media.durationUs());
+                videoSizeChangedHandler.accept(media.width(), media.height());
             } else if (event instanceof PlaybackEvent.StatusChanged statusChanged) {
                 statusChangedHandler.accept(statusChanged.status());
             } else if (event instanceof PlaybackEvent.PlaybackStateChanged stateChanged) {
@@ -674,7 +737,7 @@ public class VideoPlayerModel {
             } else if (event instanceof PlaybackEvent.PausedFrameReady preview) {
                 displayPreparedFrame(preview.frame());
             } else if (event == PlaybackEvent.FrameCleared.INSTANCE) {
-                displayedMediaTimestampUs = NO_SEEK_REQUEST;
+                displayedMediaTimestampUs.set(NO_SEEK_REQUEST);
                 displayImage = null;
                 frameReadyHandler.accept(null);
             } else if (event == PlaybackEvent.ShutdownComplete.INSTANCE) {
@@ -700,8 +763,8 @@ public class VideoPlayerModel {
             reusablePixels.offer(frame.pixels());
         }
         displayedTimestampUs.set(frame.logicalTimestampUs());
-        displayedMediaTimestampUs = frame.mediaTimestampUs();
-        subtitleLoader.moveTo(displayedMediaTimestampUs);
+        displayedMediaTimestampUs.set(frame.mediaTimestampUs());
+        subtitleLoader.moveTo(frame.mediaTimestampUs());
         relativeSeekBaseUs.set(NO_SEEK_REQUEST);
 
         // Dump some logging to the console once per second so that real time performance can be monitored.
@@ -722,10 +785,25 @@ public class VideoPlayerModel {
     }
 
     private void refreshSubtitle() {
-        String text = subtitler.textAt(displayedMediaTimestampUs);
+        long timestampUs = displayedMediaTimestampUs.get();
+        String text = subtitler.textAt(timestampUs);
         if (!displayedSubtitleText.equals(text)) {
             displayedSubtitleText = text;
             subtitleTextChangedHandler.accept(text);
+        }
+        SubtitleLoader.Progress progress = subtitleLoader.progress();
+        if (!progress.equals(subtitleProgress.get())) {
+            subtitleProgress.set(progress);
+        }
+        if (progress.state() == SubtitleLoader.State.READY || progress.state() == SubtitleLoader.State.NO_AUDIO) {
+            resumeAfterSubtitlePreparation();
+        }
+    }
+
+    private void resumeAfterSubtitlePreparation() {
+        if (waitingForSubtitles) {
+            waitingForSubtitles = false;
+            enqueueCommand(new PlaybackCommand.ResumePrepared(requestedSubtitleVersion));
         }
     }
 
@@ -984,6 +1062,7 @@ public class VideoPlayerModel {
     /** Invalidates queued output before publishing the error state to JavaFX. */
     private void handlePlaybackError(Exception e) {
         e.printStackTrace();
+        subtitleLoader.mediaFailed(subtitleVersion);
         playbackGeneration++;
         activePlaybackGeneration.set(playbackGeneration);
         closePlaybackResources();
@@ -1089,10 +1168,6 @@ public class VideoPlayerModel {
             return grabber.grab();
         }
         return grabber.grabImage();
-    }
-
-    private void notifyVideoSizeChanged(int width, int height) {
-        playbackEvents.offer(new PlaybackEvent.VideoSizeChanged(width, height));
     }
 
     private void notifyFrameCleared() {

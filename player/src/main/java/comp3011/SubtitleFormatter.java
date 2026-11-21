@@ -16,6 +16,12 @@ final class SubtitleFormatter {
 
     static List<SubtitleSegment> format(
             List<SubtitleSegment> segments, long audioStartUs, long windowStartUs, long windowEndUs) {
+        return format(segments, audioStartUs, windowStartUs, windowEndUs, null);
+    }
+
+    static List<SubtitleSegment> format(
+            List<SubtitleSegment> segments, long audioStartUs, long windowStartUs, long windowEndUs,
+            AudioActivity activity) {
         double offset = audioStartUs / 1_000_000.0;
         double windowStart = windowStartUs / 1_000_000.0;
         double windowEnd = windowEndUs / 1_000_000.0;
@@ -38,6 +44,9 @@ final class SubtitleFormatter {
             }
         }
 
+        if (activity != null) {
+            cues.removeIf(cue -> !activity.supportsCue(cue.start() - offset, cue.end() - offset));
+        }
         cues.sort(Comparator.comparingDouble(SubtitleSegment::start));
         List<SubtitleSegment> result = new ArrayList<>();
         for (int i = 0; i < cues.size(); i++) {
@@ -111,10 +120,10 @@ final class SubtitleFormatter {
             previous = word;
             cursor = index + spoken.length();
         }
-        if (text.substring(cursor).codePoints().anyMatch(Character::isLetterOrDigit)) {
-            return List.of();
-        }
-        result.add(new TimedWord(previous.start(), previous.end(), text.substring(displayStart)));
+        // Keep valid word timings when the segment text has an untimed tail.
+        boolean untimedTail = text.substring(cursor).codePoints().anyMatch(Character::isLetterOrDigit);
+        double end = untimedTail ? Math.max(previous.end(), segment.end()) : previous.end();
+        result.add(new TimedWord(previous.start(), end, text.substring(displayStart)));
         return result;
     }
 

@@ -10,28 +10,35 @@
  */
 package comp3011;
 
+import java.util.Locale;
+import java.util.function.LongConsumer;
+
 import javafx.geometry.Bounds;
 import javafx.geometry.Insets;
 import javafx.geometry.Point2D;
 import javafx.geometry.Pos;
+import javafx.scene.AccessibleRole;
+import javafx.scene.Group;
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.Slider;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
+import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Line;
 import javafx.scene.shape.Polygon;
 import javafx.scene.shape.SVGPath;
 import javafx.scene.shape.StrokeLineCap;
-import javafx.scene.shape.StrokeType;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.scene.text.Text;
@@ -50,12 +57,19 @@ import javafx.scene.text.TextAlignment;
  */
 public class VideoPlayerView {
     private static final int ICON_SIZE = 28;
+    private static final long MICROS_PER_SECOND = 1_000_000L;
 
     private final ImageView imageView = new ImageView();
+    private final Group subtitleOverlay = new Group();
     private final Text subtitleText = new Text();
+    private final Text[] subtitleOutline = new Text[8];
     private final Label statusLabel = new Label("No video loaded");
+    private final Label subtitleStatusLabel = new Label();
+    private final Slider playhead = new Slider(0, 1, 0);
+    private final Label playbackTime = new Label("0:00 / --:--");
     private final Label tooltipLabel = new Label();
     private final Pane tooltipLayer = new Pane();
+    private final Button openVideoButton = new Button("Open video…");
     private final StackPane videoPane;
     private final StackPane root;
     private final Button startOverButton;
@@ -65,12 +79,15 @@ public class VideoPlayerView {
     private final Button stopButton;
     private final Button audioButton;
     private final Button subtitleButton;
+    private long durationUs;
+    private long displayedSecond = -1;
+    private boolean updatingPlayhead;
 
     public VideoPlayerView() {
         imageView.setPreserveRatio(true);
         imageView.setSmooth(false);
 
-        videoPane = new StackPane(imageView, subtitleText);
+        videoPane = new StackPane(imageView, subtitleOverlay);
         videoPane.setStyle("-fx-background-color: black;");
         videoPane.setMinSize(0, 0);
         videoPane.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
@@ -85,10 +102,14 @@ public class VideoPlayerView {
         stopButton = iconButton(createStopIcon());
         audioButton = iconButton(createAudioIcon(false));
         subtitleButton = iconButton(new Label("CC"));
+        openVideoButton.setAccessibleText("Open video with English subtitles");
         setPlaybackControlsDisabled(true);
+        subtitleStatusLabel.setVisible(false);
+        subtitleStatusLabel.managedProperty().bind(subtitleStatusLabel.visibleProperty());
 
         HBox controls = new HBox(
                 10,
+                openVideoButton,
                 startOverButton,
                 backFiveButton,
                 pausePlayButton,
@@ -96,22 +117,36 @@ public class VideoPlayerView {
                 stopButton,
                 audioButton,
                 subtitleButton,
-                statusLabel);
+                statusLabel,
+                subtitleStatusLabel);
 
         controls.setPadding(new Insets(10));
+        controls.setAlignment(Pos.CENTER_LEFT);
+
+        playhead.setAccessibleText("Playback position");
+        playbackTime.setMinWidth(85);
+        HBox timeline = new HBox(10, playhead, playbackTime);
+        timeline.setPadding(new Insets(7, 10, 0, 10));
+        timeline.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(playhead, Priority.ALWAYS);
 
         BorderPane content = new BorderPane();
         content.setCenter(videoPane);
-        content.setBottom(controls);
+        content.setBottom(new VBox(timeline, controls));
 
         configureTooltipLabel();
 
         root = new StackPane(content, tooltipLayer);
+        root.setFocusTraversable(true);
         setButtonTooltips();
     }
 
     public Parent getRoot() {
         return root;
+    }
+
+    public Button getOpenVideoButton() {
+        return openVideoButton;
     }
 
     public Button getStartOverButton() {
@@ -150,21 +185,98 @@ public class VideoPlayerView {
         imageView.setImage(image);
     }
 
+    void setSeekHandler(LongConsumer seek) {
+        playhead.valueProperty().addListener((_, _, current) -> {
+            updatePlaybackTime(current.doubleValue());
+            if (!updatingPlayhead && !playhead.isValueChanging() && !playhead.isDisabled()) {
+                seek.accept(Math.round(current.doubleValue() * MICROS_PER_SECOND));
+            }
+        });
+        playhead.valueChangingProperty().addListener((_, _, dragging) -> {
+            if (!dragging && !playhead.isDisabled()) {
+                seek.accept(Math.round(playhead.getValue() * MICROS_PER_SECOND));
+            }
+        });
+    }
+
+    void setDuration(long durationUs) {
+        this.durationUs = Math.max(0, durationUs);
+        updatingPlayhead = true;
+        playhead.setMax(durationUs > 0 ? durationUs / (double) MICROS_PER_SECOND : 1);
+        if (durationUs <= 0) {
+            playhead.setValue(0);
+        }
+        updatingPlayhead = false;
+        playhead.setDisable(durationUs <= 0 || stopButton.isDisabled());
+        displayedSecond = -1;
+        updatePlaybackTime(playhead.getValue());
+    }
+
+    void setPlayhead(long timestampUs) {
+        double position = Math.max(0, timestampUs) / (double) MICROS_PER_SECOND;
+        if (durationUs == 0) {
+            updatePlaybackTime(position);
+            return;
+        }
+        if (!playhead.isValueChanging()) {
+            updatingPlayhead = true;
+            playhead.setValue(position);
+            updatingPlayhead = false;
+        }
+    }
+
+    private void updatePlaybackTime(double position) {
+        long seconds = (long) position;
+        if (seconds != displayedSecond) {
+            displayedSecond = seconds;
+            String total = durationUs > 0 ? formatTime(durationUs / MICROS_PER_SECOND) : "--:--";
+            playbackTime.setText(formatTime(seconds) + " / " + total);
+        }
+    }
+
+    private static String formatTime(long seconds) {
+        return String.format(Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60);
+    }
+
+    void setSubtitleProgress(SubtitleLoader.Progress progress) {
+        String parts = progress.total() > 0 ? " (" + progress.completed() + "/" + progress.total() + ")" : "";
+        String status = switch (progress.state()) {
+            case OFF, READY -> "";
+            case LOADING -> "Preparing subtitles" + parts + "…";
+            case NO_AUDIO -> "No audio track";
+            case RETRYING -> "Retrying subtitles" + parts + "…";
+            case FAILED -> "Subtitles incomplete" + parts;
+        };
+        subtitleStatusLabel.setText(status);
+        subtitleStatusLabel.setVisible(!status.isEmpty());
+    }
+
     public void setSubtitleText(String text) {
         subtitleText.setText(text);
         layoutSubtitle();
     }
 
     private void configureSubtitles() {
+        subtitleOverlay.setManaged(false);
+        subtitleOverlay.setMouseTransparent(true);
+        subtitleOverlay.setVisible(false);
         subtitleText.setId("subtitle-text");
-        subtitleText.setManaged(false);
-        subtitleText.setMouseTransparent(true);
-        subtitleText.setVisible(false);
         subtitleText.setFill(Color.WHITE);
-        subtitleText.setStroke(Color.BLACK);
-        subtitleText.setStrokeType(StrokeType.OUTSIDE);
         subtitleText.setTextAlignment(TextAlignment.CENTER);
-        subtitleText.setFont(Font.font("SansSerif", FontWeight.BOLD, 12));
+
+        // Filled glyphs can use JavaFX's glyph cache, including when a cue changes.
+        for (int index = 0; index < subtitleOutline.length; index++) {
+            Text outline = new Text();
+            outline.setAccessibleRole(AccessibleRole.NODE);
+            outline.setFill(Color.BLACK);
+            outline.setTextAlignment(TextAlignment.CENTER);
+            outline.fontProperty().bind(subtitleText.fontProperty());
+            outline.textProperty().bind(subtitleText.textProperty());
+            subtitleOutline[index] = outline;
+            subtitleOverlay.getChildren().add(outline);
+        }
+        subtitleOverlay.getChildren().add(subtitleText);
+        resizeSubtitle(12);
         imageView.boundsInParentProperty().addListener((_, _, _) -> layoutSubtitle());
     }
 
@@ -172,22 +284,31 @@ public class VideoPlayerView {
         Bounds video = imageView.getBoundsInParent();
         if (subtitleText.getText().isEmpty() || imageView.getImage() == null
                 || video.getWidth() <= 0 || video.getHeight() <= 0) {
-            subtitleText.setVisible(false);
+            subtitleOverlay.setVisible(false);
             return;
         }
 
         double size = Math.clamp(video.getHeight() * 0.052, 12, 60);
         if (size != subtitleText.getFont().getSize()) {
-            subtitleText.setFont(Font.font("SansSerif", FontWeight.BOLD, size));
+            resizeSubtitle(size);
         }
-        subtitleText.setStrokeWidth(size / 12);
-        Bounds text = subtitleText.getLayoutBounds();
+        Bounds text = subtitleOverlay.getLayoutBounds();
         double scale = Math.min(1, video.getWidth() * 0.9 / text.getWidth());
-        subtitleText.setScaleX(scale);
-        subtitleText.setScaleY(scale);
-        subtitleText.relocate(video.getMinX() + (video.getWidth() - text.getWidth()) / 2,
+        subtitleOverlay.setScaleX(scale);
+        subtitleOverlay.setScaleY(scale);
+        subtitleOverlay.relocate(video.getMinX() + (video.getWidth() - text.getWidth()) / 2,
                 video.getMaxY() - video.getHeight() * 0.07 - text.getHeight() * (1 + scale) / 2);
-        subtitleText.setVisible(true);
+        subtitleOverlay.setVisible(true);
+    }
+
+    private void resizeSubtitle(double size) {
+        subtitleText.setFont(Font.font("SansSerif", FontWeight.BOLD, size));
+        double radius = size / 12;
+        for (int index = 0; index < subtitleOutline.length; index++) {
+            double angle = index * Math.PI / 4;
+            subtitleOutline[index].setTranslateX(radius * Math.cos(angle));
+            subtitleOutline[index].setTranslateY(radius * Math.sin(angle));
+        }
     }
 
     public void setVideoDisplaySize(double width, double height) {
@@ -214,6 +335,7 @@ public class VideoPlayerView {
         stopButton.setDisable(disabled);
         audioButton.setDisable(disabled);
         subtitleButton.setDisable(disabled);
+        playhead.setDisable(disabled || durationUs <= 0);
     }
 
     // There are a bunch of tooltip handling methods starting from here. We want to use tooltips so that people with
@@ -225,6 +347,8 @@ public class VideoPlayerView {
         setButtonTooltip(forwardFiveButton, "[RIGHT]");
         setButtonTooltip(stopButton, "[ESC]");
         setButtonTooltip(audioButton, "[A]");
+        setButtonTooltip(openVideoButton, "[CTRL+O]");
+        setButtonTooltip(subtitleButton, "[S]");
     }
 
     private void setButtonTooltip(Button button, String text) {
@@ -418,5 +542,6 @@ public class VideoPlayerView {
         Label icon = new Label(enabled ? "CC" : "CC×");
         icon.setMouseTransparent(true);
         subtitleButton.setGraphic(icon);
+        subtitleButton.setAccessibleText(enabled ? "Subtitles on" : "Subtitles off");
     }
 }

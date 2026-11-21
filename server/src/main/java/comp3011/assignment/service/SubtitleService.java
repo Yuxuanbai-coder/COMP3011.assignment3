@@ -25,19 +25,16 @@ public class SubtitleService {
     private final RestClient restClient;
     private final String apiKey;
     private final String transcriptionUrl;
-    private final String language;
     private final GlobalStatistics globalStatistics;
 
     public SubtitleService(
             RestClient transcriptionRestClient,
             @Value("${OPENAI_API_KEY:}") String apiKey,
             @Value("${openai.transcription-url}") String transcriptionUrl,
-            @Value("${SUBTITLE_LANGUAGE:}") String language,
             GlobalStatistics globalStatistics) {
         this.restClient = transcriptionRestClient;
         this.apiKey = apiKey;
         this.transcriptionUrl = transcriptionUrl;
-        this.language = language.strip();
         this.globalStatistics = globalStatistics;
     }
 
@@ -52,9 +49,7 @@ public class SubtitleService {
         requestBody.add("response_format", "verbose_json");
         requestBody.add("timestamp_granularities[]", "word");
         requestBody.add("timestamp_granularities[]", "segment");
-        if (!language.isEmpty()) {
-            requestBody.add("language", language);
-        }
+        requestBody.add("language", "en");
         WhisperResponse response;
         try {
             response = restClient.post()

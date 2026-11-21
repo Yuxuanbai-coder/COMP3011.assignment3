@@ -42,13 +42,15 @@ public class VideoPlayerApp extends Application {
     @Override
     public void start(Stage stage) {
         this.stage = stage;
+        boolean noVideo = commandLineController.getVideoFile() == null;
 
         controller = new VideoPlayerController(
-                commandLineController.isAudioRequested(),
+                commandLineController.isAudioRequested() || noVideo,
                 commandLineController.getFrameProcessorOptions(),
                 this::setVideoSize);
 
-        Scene scene = new Scene(controller.getView().getRoot());
+        Scene scene = noVideo ? new Scene(controller.getView().getRoot(), 850, 500)
+                : new Scene(controller.getView().getRoot());
         controller.installKeyboardShortcuts(scene);
 
         stage.setTitle("COMP3011 Video Player");
@@ -56,12 +58,15 @@ public class VideoPlayerApp extends Application {
         moveToSelectedScreen(stage);
         stage.setMaximized(commandLineController.isMaximiseRequested());
         stage.show();
+        scene.getRoot().requestFocus();
 
         stage.outputScaleXProperty().addListener((_, _, _) -> updateVideoSize());
         stage.outputScaleYProperty().addListener((_, _, _) -> updateVideoSize());
         stage.setOnCloseRequest(_ -> controller.shutdown());
 
-        playVideo();
+        if (!noVideo) {
+            controller.play(commandLineController.getVideoFile());
+        }
     }
 
     private void moveToSelectedScreen(Stage stage) {
@@ -85,10 +90,6 @@ public class VideoPlayerApp extends Application {
         selectedScreenBounds = bounds;
         stage.setX(bounds.getMinX());
         stage.setY(bounds.getMinY());
-    }
-
-    private void playVideo() {
-        controller.play(commandLineController.getVideoFile());
     }
 
     private void setVideoSize(int width, int height) {

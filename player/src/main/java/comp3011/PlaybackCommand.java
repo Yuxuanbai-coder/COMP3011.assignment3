@@ -13,10 +13,13 @@ import java.util.Objects;
  * Immutable commands sent from the JavaFX thread to the playback worker.
  */
 sealed interface PlaybackCommand {
-    record Play(File file) implements PlaybackCommand {
+    record Play(File file, long subtitleVersion, boolean prepareSubtitles) implements PlaybackCommand {
         public Play {
             Objects.requireNonNull(file, "file");
         }
+    }
+
+    record ResumePrepared(long subtitleVersion) implements PlaybackCommand {
     }
 
     record SeekTo(long timestampUs) implements PlaybackCommand {

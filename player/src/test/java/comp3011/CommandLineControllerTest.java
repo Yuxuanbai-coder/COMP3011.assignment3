@@ -117,6 +117,13 @@ class CommandLineControllerTest {
     }
 
     @Test
+    void opensTheFilePickerPlayerWithoutAVideoArgument() {
+        var controller = new CommandLineController(new String[0]);
+        assertTrue(controller.shouldLaunchApplication());
+        assertNull(controller.getVideoFile());
+    }
+
+    @Test
     void rejectsUnknownEffectOptions() {
         String output = captureStandardOutput(() -> {
             CommandLineController controller = new CommandLineController(

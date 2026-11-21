@@ -75,7 +75,7 @@ public class CommandLineController {
     }
 
     public boolean shouldLaunchApplication() {
-        return errorMessage == null && videoFile != null;
+        return errorMessage == null && (videoFile != null || !helpRequested);
     }
 
     /** Parses arguments left to right so appending effect options preserves their requested order. */
@@ -108,10 +108,6 @@ public class CommandLineController {
             if (!videoFile.isFile()) {
                 setErrorMessage("File not found: " + videoFile.getPath());
                 videoFile = null;
-            }
-        } else {
-            if (!helpRequested && errorMessage == null) {
-                setErrorMessage("No video file specified.");
             }
         }
     }

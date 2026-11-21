@@ -18,6 +18,7 @@ import javafx.scene.Scene;
 import javafx.scene.image.Image;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
+import javafx.stage.FileChooser;
 
 /**
  * The controller part of the video player model-view-controller architecture.
@@ -49,6 +50,12 @@ public class VideoPlayerController {
                 view::setSubtitleText,
                 new SubtitleLoader());
 
+        view.setSeekHandler(model::seekToPosition);
+        model.displayedDurationUsProperty().addListener((_, _, duration) -> view.setDuration(duration.longValue()));
+        model.displayedMediaTimestampUsProperty().addListener((_, _, time) -> view.setPlayhead(time.longValue()));
+        model.subtitleProgressProperty().addListener((_, _, progress) -> view.setSubtitleProgress(progress));
+
+        view.getOpenVideoButton().setOnAction(_ -> openVideo());
         view.getStartOverButton().setOnAction(_ -> startOver());
         view.getBackFiveButton().setOnAction(_ -> backFiveSeconds());
         view.getPausePlayButton().setOnAction(_ -> togglePause());
@@ -62,7 +69,10 @@ public class VideoPlayerController {
 
     public void installKeyboardShortcuts(Scene scene) {
         scene.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
-            if (event.getCode() == KeyCode.ESCAPE) {
+            if (event.getCode() == KeyCode.O && event.isShortcutDown()) {
+                openVideo();
+                event.consume();
+            } else if (event.getCode() == KeyCode.ESCAPE) {
                 stopAndExit();
                 event.consume();
             } else if (event.getCode() == KeyCode.SPACE) {
@@ -98,6 +108,22 @@ public class VideoPlayerController {
 
     public void shutdown() {
         model.shutdown();
+    }
+
+    private void openVideo() {
+        FileChooser picker = new FileChooser();
+        picker.setTitle("Open video with English subtitles");
+        picker.getExtensionFilters().addAll(
+                new FileChooser.ExtensionFilter("Video files", "*.mp4", "*.mkv", "*.mov", "*.avi",
+                        "*.webm", "*.m4v", "*.wmv", "*.mpg", "*.mpeg", "*.ts", "*.m2ts"),
+                new FileChooser.ExtensionFilter("All files", "*"));
+        File file = picker.showOpenDialog(view.getRoot().getScene().getWindow());
+        if (file != null) {
+            view.setPlaybackControlsDisabled(false);
+            model.playWithSubtitles(file);
+            view.showSubtitlesEnabled(true);
+        }
+        view.getRoot().requestFocus();
     }
 
     private void startOver() {

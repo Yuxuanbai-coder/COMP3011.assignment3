@@ -6,29 +6,34 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.OptionalLong;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
-/** Loads the current audio window and prefetches the next one. Developed with OpenAI Codex assistance. */
+/** Prepares the entire video's subtitle track in bounded jobs. Developed with OpenAI Codex assistance. */
 public class SubtitleLoader {
     private static final long WINDOW_US = 20_000_000L;
-    private static final long CONTEXT_US = 1_000_000L;
-    private static final long PREFETCH_US = 15_000_000L;
+    private static final long CONTEXT_US = 3_000_000L;
+    private static final int WORKER_COUNT = 3;
+    private static final long UNKNOWN_DURATION = -1;
+    private static final int MAX_ATTEMPTS = 3;
 
     private final SubtitleClient client;
     private final Map<Long, List<SubtitleSegment>> completed = new HashMap<>();
     private final Map<Long, Failure> failures = new HashMap<>();
+    private final Map<Long, Request> activeRequests = new HashMap<>();
 
-    private Thread worker;
-    private Request activeRequest;
+    private boolean workersStarted;
     private File videoFile;
     private long videoVersion;
     private long positionUs;
     private long durationUs;
+    private boolean mediaOpened;
     private boolean hasAudio;
+    private boolean failed;
     private boolean enabled;
     private boolean closed;
 
@@ -40,39 +45,45 @@ public class SubtitleLoader {
         this.client = client;
     }
 
-    public synchronized void setVideo(File file) {
+    public synchronized long setVideo(File file) {
         if (closed) {
-            return;
+            return videoVersion;
         }
         videoFile = file;
         videoVersion++;
         positionUs = 0;
         durationUs = 0;
+        mediaOpened = false;
         hasAudio = false;
+        failed = false;
         completed.clear();
         failures.clear();
-        if (worker != null) {
-            worker.interrupt();
+        activeRequests.values().forEach(request -> request.worker().interrupt());
+        notifyAll();
+        return videoVersion;
+    }
+
+    synchronized void mediaOpened(long version, boolean hasAudio, long durationUs) {
+        if (!closed && version == videoVersion && !mediaOpened) {
+            mediaOpened = true;
+            this.hasAudio = hasAudio;
+            this.durationUs = durationUs > 0 ? durationUs : UNKNOWN_DURATION;
+            notifyAll();
         }
     }
 
-    public synchronized void mediaOpened(File file, boolean hasAudio, long durationUs) {
-        if (!closed && file.equals(videoFile)) {
-            this.hasAudio = hasAudio;
-            this.durationUs = durationUs > 0 ? durationUs : Long.MAX_VALUE;
+    synchronized void mediaFailed(long version) {
+        if (version == videoVersion) {
+            failed = true;
+            activeRequests.values().forEach(request -> request.worker().interrupt());
             notifyAll();
         }
     }
 
     public synchronized void moveTo(long timestampUs) {
         long previousWindow = windowStart(positionUs);
-        boolean wasPrefetching = wantsNextWindow();
         positionUs = Math.max(0, timestampUs);
-        long currentWindow = windowStart(positionUs);
-        if (previousWindow != currentWindow && activeRequest != null && !wantsWindow(activeRequest.startUs())) {
-            worker.interrupt();
-        }
-        if (previousWindow != currentWindow || wasPrefetching != wantsNextWindow()) {
+        if (previousWindow != windowStart(positionUs)) {
             notifyAll();
         }
     }
@@ -84,8 +95,12 @@ public class SubtitleLoader {
         this.enabled = enabled;
         if (enabled) {
             failures.clear();
-            if (worker == null) {
-                worker = Thread.ofPlatform().name("subtitle-loader").daemon().start(this::run);
+            failed = false;
+            if (!workersStarted) {
+                for (int i = 1; i <= WORKER_COUNT; i++) {
+                    Thread.ofPlatform().name("subtitle-loader-" + i).daemon().start(this::run);
+                }
+                workersStarted = true;
             }
         }
         notifyAll();
@@ -93,6 +108,23 @@ public class SubtitleLoader {
 
     public synchronized String textAt(long timestampUs) {
         return textInWindow(completed.get(windowStart(timestampUs)), timestampUs);
+    }
+
+    synchronized Progress progress() {
+        if (!enabled || closed || videoFile == null) {
+            return new Progress(State.OFF, 0, 0);
+        }
+        long total = hasAudio && durationUs > 0 ? (durationUs - 1) / WINDOW_US + 1 : 0;
+        if (failed) {
+            return new Progress(State.FAILED, completed.size(), total);
+        }
+        if (mediaOpened && !hasAudio) {
+            return new Progress(State.NO_AUDIO, 0, 0);
+        }
+        if (total > 0 && completed.size() == total) {
+            return new Progress(State.READY, completed.size(), total);
+        }
+        return new Progress(failures.isEmpty() ? State.LOADING : State.RETRYING, completed.size(), total);
     }
 
     private static String textInWindow(List<SubtitleSegment> segments, long timestampUs) {
@@ -109,8 +141,9 @@ public class SubtitleLoader {
 
     private void run() {
         while (true) {
+            Request request = null;
             try {
-                Request request = awaitRequest();
+                request = awaitRequest();
                 if (request == null) {
                     return;
                 }
@@ -119,8 +152,11 @@ public class SubtitleLoader {
                 // Recheck the playback position and media version after cancellation.
                 Thread.interrupted();
             } finally {
-                synchronized (this) {
-                    activeRequest = null;
+                if (request != null) {
+                    synchronized (this) {
+                        activeRequests.remove(request.startUs(), request);
+                        notifyAll();
+                    }
                 }
             }
         }
@@ -128,58 +164,110 @@ public class SubtitleLoader {
 
     private synchronized Request awaitRequest() throws InterruptedException {
         while (!closed) {
-            if (enabled && hasAudio) {
-                long startUs = windowStart(positionUs);
-                if (completed.containsKey(startUs) && wantsNextWindow()) {
-                    startUs += WINDOW_US;
-                }
-                if (startUs < durationUs && !completed.containsKey(startUs)) {
-                    Failure failure = failures.get(startUs);
-                    long waitNs = failure == null ? 0 : failure.retryAtNs() - System.nanoTime();
-                    if (failure == null || failure.retryable() && waitNs <= 0) {
-                        activeRequest = new Request(videoFile, videoVersion, startUs, durationUs);
-                        return activeRequest;
+            long retryDelayNs = Long.MAX_VALUE;
+            if (enabled && hasAudio && !failed) {
+                if (durationUs == UNKNOWN_DURATION) {
+                    if (isPending(0)) {
+                        return reserve(0);
                     }
-                    if (failure.retryable()) {
-                        TimeUnit.NANOSECONDS.timedWait(this, waitNs);
-                        continue;
+                } else {
+                    long nowNs = System.nanoTime();
+                    long currentUs = windowStart(positionUs);
+                    if (isPending(currentUs) && retryDelay(currentUs, nowNs) <= 0) {
+                        return reserve(currentUs);
+                    }
+                    for (long startUs = 0; startUs < durationUs; startUs += WINDOW_US) {
+                        if (isPending(startUs)) {
+                            long delayNs = retryDelay(startUs, nowNs);
+                            if (delayNs <= 0) {
+                                return reserve(startUs);
+                            }
+                            retryDelayNs = Math.min(retryDelayNs, delayNs);
+                        }
                     }
                 }
             }
-            wait();
+            if (retryDelayNs == Long.MAX_VALUE) {
+                wait();
+            } else {
+                TimeUnit.NANOSECONDS.timedWait(this, retryDelayNs);
+            }
         }
         return null;
     }
 
+    private boolean isPending(long startUs) {
+        return (durationUs == UNKNOWN_DURATION || startUs < durationUs)
+                && !completed.containsKey(startUs) && !activeRequests.containsKey(startUs);
+    }
+
+    private long retryDelay(long startUs, long nowNs) {
+        Failure failure = failures.get(startUs);
+        return failure == null ? 0 : failure.retryAtNs() - nowNs;
+    }
+
+    private Request reserve(long startUs) {
+        Request request = new Request(videoFile, videoVersion, startUs, durationUs, Thread.currentThread());
+        activeRequests.put(startUs, request);
+        return request;
+    }
+
     private void load(Request request) throws InterruptedException {
+        long startedNs = System.nanoTime();
         Path directory = null;
         Path audioFile = null;
         try {
+            if (request.durationUs() == UNKNOWN_DURATION) {
+                long audioDurationUs = AudioExtractor.audioDurationUs(request.file().toPath());
+                synchronized (this) {
+                    if (isCurrent(request)) {
+                        durationUs = audioDurationUs;
+                        hasAudio = audioDurationUs > 0;
+                    }
+                }
+                return;
+            }
             directory = Files.createTempDirectory("a3-subtitle-");
-            audioFile = directory.resolve("audio.flac");
+            audioFile = directory.resolve("audio.wav");
             long clipStartUs = Math.max(0, request.startUs() - CONTEXT_US);
             long windowEndUs = Math.min(request.durationUs(), request.startUs() + WINDOW_US);
             long clipEndUs = Math.min(request.durationUs(), windowEndUs + CONTEXT_US);
-            OptionalLong audioStartUs = AudioExtractor.extractSubtitleChunk(
+            Optional<AudioExtractor.SubtitleAudio> extracted = AudioExtractor.extractSubtitleChunk(
                     request.file().toPath(), audioFile, clipStartUs, clipEndUs - clipStartUs);
-            synchronized (this) {
-                if (!isCurrent(request) || !enabled || !wantsWindow(request.startUs())) {
-                    return;
-                }
+            if (!canSubmit(request)) {
+                return;
             }
             List<SubtitleSegment> segments = List.of();
-            if (audioStartUs.isPresent()) {
-                segments = SubtitleFormatter.format(requestSubtitles(audioFile), audioStartUs.getAsLong(),
-                        request.startUs(), windowEndUs);
-            }
-            synchronized (this) {
-                if (isCurrent(request)) {
-                    completed.put(request.startUs(), segments);
-                    failures.remove(request.startUs());
-                    System.out.printf("Subtitle segments ready: %d (%d seconds into video)%n",
-                            segments.size(), request.startUs() / 1_000_000L);
+            if (extracted.isPresent() && extracted.get().activity().containsSignal()) {
+                AudioExtractor.SubtitleAudio audio = extracted.get();
+                segments = transcribe(audioFile, audio, request.startUs(), windowEndUs);
+                long retryStartUs = audio.startUs() + audio.activity().retryAfterQuietLeadUs();
+                if (segments.isEmpty() && retryStartUs > clipStartUs && retryStartUs < windowEndUs) {
+                    // An active window can come back empty after a long quiet lead. Retry from its first sustained sound.
+                    Files.delete(audioFile);
+                    var retry = AudioExtractor.extractSubtitleChunk(
+                            request.file().toPath(), audioFile, retryStartUs, clipEndUs - retryStartUs);
+                    if (!canSubmit(request)) {
+                        return;
+                    }
+                    if (retry.isPresent()) {
+                        segments = transcribe(audioFile, retry.get(), request.startUs(), windowEndUs);
+                    }
                 }
             }
+            long playheadUs;
+            synchronized (this) {
+                if (!isCurrent(request)) {
+                    return;
+                }
+                completed.put(request.startUs(), segments);
+                failures.remove(request.startUs());
+                playheadUs = positionUs;
+            }
+            System.out.printf(Locale.ROOT,
+                    "Subtitle segments ready: %d (window %ds, playhead %.2fs, loaded in %.2fs)%n",
+                    segments.size(), request.startUs() / 1_000_000L, playheadUs / 1_000_000.0,
+                    (System.nanoTime() - startedNs) / 1_000_000_000.0);
         } catch (InterruptedException e) {
             throw e;
         } catch (ExecutionException e) {
@@ -195,6 +283,16 @@ public class SubtitleLoader {
         }
     }
 
+    private synchronized boolean canSubmit(Request request) {
+        return isCurrent(request) && enabled && !failed;
+    }
+
+    private List<SubtitleSegment> transcribe(
+            Path file, AudioExtractor.SubtitleAudio audio, long startUs, long endUs)
+            throws IOException, InterruptedException, ExecutionException {
+        return SubtitleFormatter.format(requestSubtitles(file), audio.startUs(), startUs, endUs, audio.activity());
+    }
+
     private List<SubtitleSegment> requestSubtitles(Path audioFile)
             throws IOException, InterruptedException, ExecutionException {
         CompletableFuture<List<SubtitleSegment>> response = client.requestSubtitles(audioFile);
@@ -206,29 +304,24 @@ public class SubtitleLoader {
         }
     }
 
-    private synchronized void recordFailure(Request request, Throwable cause, boolean retryable) {
-        if (isCurrent(request)) {
+    private void recordFailure(Request request, Throwable cause, boolean retryable) {
+        synchronized (this) {
+            if (!isCurrent(request)) {
+                return;
+            }
             Failure previous = failures.get(request.startUs());
-            int attempts = previous == null ? 1 : Math.min(previous.attempts() + 1, 4);
-            long delayNs = TimeUnit.SECONDS.toNanos(Math.min(1L << attempts, 15));
-            failures.put(request.startUs(), new Failure(attempts, System.nanoTime() + delayNs, retryable));
-            System.err.printf("Subtitle loading failed at %d seconds: %s%s%n",
-                    request.startUs() / 1_000_000L, cause.getMessage(), retryable ? " (will retry)" : "");
+            int attempts = previous == null ? 1 : previous.attempts() + 1;
+            retryable = retryable && attempts < MAX_ATTEMPTS;
+            long delayNs = TimeUnit.SECONDS.toNanos(1L << attempts);
+            failures.put(request.startUs(), new Failure(attempts, System.nanoTime() + delayNs));
+            failed |= !retryable;
         }
+        System.err.printf("Subtitle loading failed at %d seconds: %s%s%n",
+                request.startUs() / 1_000_000L, cause.getMessage(), retryable ? " (will retry)" : "");
     }
 
     private boolean isCurrent(Request request) {
         return !closed && request.version() == videoVersion;
-    }
-
-    private boolean wantsNextWindow() {
-        return positionUs % WINDOW_US >= WINDOW_US - PREFETCH_US;
-    }
-
-    private boolean wantsWindow(long startUs) {
-        long currentWindow = windowStart(positionUs);
-        return startUs == currentWindow || startUs == currentWindow + WINDOW_US
-                && completed.containsKey(currentWindow) && wantsNextWindow();
     }
 
     private static long windowStart(long timestampUs) {
@@ -248,14 +341,20 @@ public class SubtitleLoader {
     public synchronized void close() {
         closed = true;
         completed.clear();
-        if (worker != null) {
-            worker.interrupt();
-        }
+        activeRequests.values().forEach(request -> request.worker().interrupt());
+        notifyAll();
     }
 
-    private record Request(File file, long version, long startUs, long durationUs) {
+    enum State {
+        OFF, LOADING, READY, NO_AUDIO, RETRYING, FAILED
     }
 
-    private record Failure(int attempts, long retryAtNs, boolean retryable) {
+    record Progress(State state, int completed, long total) {
+    }
+
+    private record Request(File file, long version, long startUs, long durationUs, Thread worker) {
+    }
+
+    private record Failure(int attempts, long retryAtNs) {
     }
 }
