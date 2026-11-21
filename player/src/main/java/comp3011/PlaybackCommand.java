@@ -24,6 +24,10 @@ sealed interface PlaybackCommand {
     record ResumePrepared(long subtitleVersion) implements PlaybackCommand {
     }
 
+    /** Replays the suffix of the effect chain on owned pixels when a cue arrives late. */
+    record RenderSubtitle(PreparedFrame frame, String text, byte[] sourcePixels) implements PlaybackCommand {
+    }
+
     record SeekTo(long timestampUs) implements PlaybackCommand {
     }
 

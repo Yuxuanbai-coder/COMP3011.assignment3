@@ -145,6 +145,19 @@ public class SubtitleLoader {
         return textInWindow(completed.get(windowStart(timestampUs)), timestampUs);
     }
 
+    /** A3 NOTE: Distinguishes a known silent frame from a frame whose cue may arrive later. */
+    synchronized Cue cueAt(long version, long timestampUs) {
+        if (version != videoVersion || closed) {
+            return new Cue("", false);
+        }
+        var segments = completed.get(windowStart(timestampUs));
+        boolean pending = segments == null && mediaOpened && hasAudio && timestampUs < durationUs;
+        return new Cue(textInWindow(segments, timestampUs), pending);
+    }
+
+    record Cue(String text, boolean pending) {
+    }
+
     /** A3 NOTE: Produces a small status snapshot for the UI, including silent media and permanently failed windows. */
     synchronized Progress progress() {
         if (!enabled || closed || videoFile == null) {

@@ -130,7 +130,7 @@ This is equivalent to `-j -f -d -d -n`.
 
 The chosen effects stay active when you open another video. To change the effect sequence, close the player and relaunch it with different options. Captions and audio can still be toggled during playback.
 
-The caption frame processor renders white, black-outlined text into the displayed video after the visual effects so the captions stay legible.
+Subtitle processing follows the same left-to-right order. With `-bS`, light bleed runs before the white, black-outlined captions are drawn. With `-SbS`, the first caption supplies bright pixels for the light bleed, and the second caption redraws the text over the resulting glow. Use the CC button to remove or restore both the text and its glow during playback or while paused. If you start without a subtitle option, turning on CC draws captions after the visual effects.
 
 ## Playback controls
 
@@ -196,7 +196,7 @@ To open a video directly, save it as `player/movie.mp4` and run the following fr
 ```bash
 cd player
 
-sh ../server/mvnw javafx:run '-Djavafx.args=movie.mp4 -a -S -w -v'
+sh ../server/mvnw javafx:run '-Djavafx.args=movie.mp4 -a -w -v -S'
 
 cd ..
 ```

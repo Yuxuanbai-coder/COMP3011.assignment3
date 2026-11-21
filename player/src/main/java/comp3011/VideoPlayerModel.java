@@ -60,14 +60,17 @@ public class VideoPlayerModel {
     private static final int DISPLAY_BYTES_PER_PIXEL = 4;
 
     private final List<FrameProcessor> frameProcessors;
-    private final FrameSubtitler frameSubtitler;
+    private final int firstSubtitleProcessor;
+    private final boolean effectsFollowSubtitles;
+    private final FrameSubtitler captionRasterizer;
     private final PlaybackProfiler playbackProfiler;
     // The playback worker consumes commands and produces frames and UI events.
     private final BlockingQueue<PlaybackCommand> playbackCommands = new LinkedBlockingQueue<>();
     // A small bounded queue limits image memory and pauses decoding when the display falls behind.
     private final BlockingQueue<PreparedFrame> preparedFrames = new ArrayBlockingQueue<>(FRAME_QUEUE_CAPACITY);
     // A3 NOTE: Recycle BGRA pixel arrays after JavaFX copies them to limit per-frame allocations.
-    private final BlockingQueue<byte[]> reusablePixels = new ArrayBlockingQueue<>(FRAME_QUEUE_CAPACITY + 2);
+    private final BlockingQueue<byte[]> reusablePixels = new ArrayBlockingQueue<>(2 * (FRAME_QUEUE_CAPACITY + 2));
+    private final BlockingQueue<byte[]> reusableSubtitleSources = new ArrayBlockingQueue<>(FRAME_QUEUE_CAPACITY + 2);
     // Decoded PCM packets cross from the playback worker to the audio-output worker.
     private final BlockingQueue<AudioPacket> audioPackets = new ArrayBlockingQueue<>(AUDIO_QUEUE_CAPACITY);
     // Only audioOutputWorker creates, uses, flushes, or closes AudioPlayer in response to these commands.
@@ -105,8 +108,9 @@ public class VideoPlayerModel {
     private String displayedSubtitleText = "";
     private WritableImage displayImage;
     private long displayImageGeneration;
-    // JavaFX retains the uncaptioned pixels of the current frame for immediate toggles.
+    // JavaFX retains the current frame's renderings for immediate CC changes without resetting playback.
     private PreparedFrame displayedFrame;
+    private PlaybackEvent.SubtitleRendered lateSubtitle;
     private FrameSubtitler.Caption paintedCaption;
     private byte[] subtitlePixels = new byte[0];
 
@@ -178,13 +182,18 @@ public class VideoPlayerModel {
         this.subtitleTextChangedHandler = subtitleTextChangedHandler;
         this.subtitleLoader = subtitleLoader;
         this.subtitlesEnabled = new AtomicBoolean(subtitlesEnabled);
-        frameSubtitler = new FrameSubtitler(timestamp -> this.subtitlesEnabled.get()
-                ? subtitleLoader.textAt(Math.max(0, timestamp - mediaStartUs)) : "");
-        List<FrameProcessor> processors = new ArrayList<>();
-        frameProcessorOptions.stream().map(FrameProcessorOption::createProcessor).forEach(processors::add);
-        // Compositing captions after the visual effects preserves their contrast.
-        processors.add(frameSubtitler);
-        frameProcessors = List.copyOf(processors);
+        var options = new ArrayList<>(frameProcessorOptions);
+        int firstSubtitle = options.indexOf(FrameProcessorOption.SUBTITLE_FRAMES);
+        if (firstSubtitle < 0) {
+            // The CC button can enable a final subtitle stage even without a launch option.
+            firstSubtitle = options.size();
+            options.add(FrameProcessorOption.SUBTITLE_FRAMES);
+        }
+        firstSubtitleProcessor = firstSubtitle;
+        effectsFollowSubtitles = options.subList(firstSubtitle + 1, options.size()).stream()
+                .anyMatch(option -> option != FrameProcessorOption.SUBTITLE_FRAMES);
+        frameProcessors = options.stream().map(FrameProcessorOption::createProcessor).toList();
+        captionRasterizer = (FrameSubtitler) frameProcessors.get(firstSubtitleProcessor);
         playbackProfiler = new PlaybackProfiler(this.frameProcessors);
 
         audioOutputWorker = new Thread(this::runAudioOutputWorker, "video-audio-output-worker");
@@ -351,6 +360,8 @@ public class VideoPlayerModel {
             if (resume.subtitleVersion() == subtitleVersion && playbackOpen && pauseRequested) {
                 togglePauseOnPlaybackWorker();
             }
+        } else if (command instanceof PlaybackCommand.RenderSubtitle render) {
+            renderLateSubtitle(render);
         } else if (command instanceof PlaybackCommand.SeekTo seekCommand) {
             if (videoFile != null) {
                 seekTo(seekCommand.timestampUs());
@@ -583,7 +594,7 @@ public class VideoPlayerModel {
             if (pauseRequested) {
                 playbackEvents.offer(new PlaybackEvent.PausedFrameReady(frame));
             } else if (!preparedFrames.offer(frame)) {
-                reusablePixels.offer(frame.pixels());
+                releasePreparedFrame(frame);
             }
         } catch (Exception e) {
             handlePlaybackError(e);
@@ -655,42 +666,91 @@ public class VideoPlayerModel {
             }
 
             int frameNumber = grabber.getFrameNumber();
-            InfoFrame info = new InfoFrame(frameNumber, timestampUs);
-            processFrame(frame, info);
-
-            long conversionStartedNs = playbackProfiler.enabled() ? System.nanoTime() : 0;
-            byte[] pixels = copyPixels(frame);
-            if (playbackProfiler.enabled()) {
-                playbackProfiler.recordConversion(System.nanoTime() - conversionStartedNs);
-                playbackProfiler.recordCompletedFrame();
-            }
-            long relativeTimestampUs = Math.max(0, timestampUs - firstTimestampUs);
-            long logicalTimestampUs = logicalPlaybackBaseUs + relativeTimestampUs;
-            long targetTimeNs = playbackStartNs + relativeTimestampUs * 1_000L;
-            currentTimestampUs = logicalTimestampUs;
-
-            return new PreparedFrame(
-                    playbackGeneration,
-                    pixels,
-                    frame.imageWidth,
-                    frame.imageHeight,
-                    mediaTimestampUs,
-                    logicalTimestampUs,
-                    targetTimeNs,
-                    frameSubtitler.preparedCaption());
+            return prepareFrame(frame, new InfoFrame(frameNumber, timestampUs), mediaTimestampUs);
         }
 
         return null;
     }
 
+    /** Shares the stages before the first subtitle between the two versions of an ordered frame. */
+    private PreparedFrame prepareFrame(Frame frame, InfoFrame info, long mediaTimestampUs) throws Exception {
+        var cue = subtitleLoader.cueAt(subtitleVersion, mediaTimestampUs);
+        var caption = captionRasterizer.prepareCaption(cue.text(), frame.imageWidth, frame.imageHeight);
+        byte[] sourcePixels = null;
+        byte[] captionedPixels = null;
+        try {
+            processFrame(frame, info, 0, firstSubtitleProcessor, null);
+            if (effectsFollowSubtitles) {
+                if (caption != null || cue.pending()) {
+                    ByteBuffer image = (ByteBuffer) frame.image[0];
+                    sourcePixels = borrowPixels(reusableSubtitleSources, image.limit());
+                    image.get(0, sourcePixels);
+                    if (caption != null) {
+                        captionedPixels = renderOrderedSubtitle(frame, info, caption);
+                        image.put(0, sourcePixels);
+                    }
+                }
+                processFrame(frame, info, firstSubtitleProcessor, frameProcessors.size(), null);
+            }
+
+            // If subtitles are the final stages, JavaFX can blend the small rectangle as it displays the frame.
+            byte[] pixels = copyPixels(frame);
+            playbackProfiler.recordCompletedFrame();
+            long relativeTimestampUs = Math.max(0, info.timestampUs() - firstTimestampUs);
+            long logicalTimestampUs = logicalPlaybackBaseUs + relativeTimestampUs;
+            long targetTimeNs = playbackStartNs + relativeTimestampUs * 1_000L;
+            currentTimestampUs = logicalTimestampUs;
+
+            var pending = caption == null && sourcePixels != null
+                    ? new PreparedFrame.SubtitleSource(frame, info, sourcePixels)
+                    : null;
+            var result = new PreparedFrame(playbackGeneration, subtitleVersion, pixels, frame.imageWidth,
+                    frame.imageHeight, mediaTimestampUs, logicalTimestampUs, targetTimeNs, caption, captionedPixels,
+                    pending);
+            if (pending != null) {
+                sourcePixels = null;
+            }
+            captionedPixels = null;
+            return result;
+        } finally {
+            recyclePixels(reusableSubtitleSources, sourcePixels);
+            recyclePixels(reusablePixels, captionedPixels);
+        }
+    }
+
+    private byte[] renderOrderedSubtitle(Frame frame, InfoFrame info, FrameSubtitler.Caption caption) throws Exception {
+        processFrame(frame, info, firstSubtitleProcessor, frameProcessors.size(), caption);
+        return copyPixels(frame);
+    }
+
+    /** Renders a cue which arrived after decode without seeking or doing effect work on JavaFX. */
+    private void renderLateSubtitle(PlaybackCommand.RenderSubtitle render) {
+        try {
+            PreparedFrame frame = render.frame();
+            if (frame.playbackGeneration() != playbackGeneration) {
+                return;
+            }
+            var source = frame.pendingSubtitle();
+            var caption = captionRasterizer.prepareCaption(render.text(), frame.width(), frame.height());
+            if (caption != null) {
+                try (Frame image = source.wrap(frame.width(), frame.height(), render.sourcePixels())) {
+                    byte[] pixels = renderOrderedSubtitle(image, source.info, caption);
+                    playbackEvents.offer(new PlaybackEvent.SubtitleRendered(frame, render.text(), pixels));
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Could not render subtitles for the displayed frame: " + e.getMessage());
+        } finally {
+            recyclePixels(reusableSubtitleSources, render.sourcePixels());
+        }
+    }
+
     /** A3 NOTE: Copies padded native BGR pixels into owned BGRA bytes before the decoder reuses its frame buffer. */
     private byte[] copyPixels(Frame frame) {
+        long conversionStartedNs = playbackProfiler.enabled() ? System.nanoTime() : 0;
         int rowBytes = Math.multiplyExact(frame.imageWidth, DISPLAY_BYTES_PER_PIXEL);
         int pixelBytes = Math.multiplyExact(rowBytes, frame.imageHeight);
-        byte[] pixels = reusablePixels.poll();
-        if (pixels == null || pixels.length != pixelBytes) {
-            pixels = new byte[pixelBytes];
-        }
+        byte[] pixels = borrowPixels(reusablePixels, pixelBytes);
 
         // FFmpeg supplies padded BGR rows. Pack the pixels with an opaque alpha byte for JavaFX.
         ByteBuffer source = (ByteBuffer) frame.image[0];
@@ -704,14 +764,36 @@ public class VideoPlayerModel {
                 pixels[destination++] = (byte) 0xff;
             }
         }
+        if (playbackProfiler.enabled()) {
+            playbackProfiler.recordConversion(System.nanoTime() - conversionStartedNs);
+        }
         return pixels;
+    }
+
+    private static byte[] borrowPixels(BlockingQueue<byte[]> pool, int size) {
+        byte[] pixels = pool.poll();
+        return pixels != null && pixels.length == size ? pixels : new byte[size];
+    }
+
+    private static void recyclePixels(BlockingQueue<byte[]> pool, byte[] pixels) {
+        if (pixels != null) {
+            pool.offer(pixels);
+        }
+    }
+
+    private void releasePreparedFrame(PreparedFrame frame) {
+        reusablePixels.offer(frame.pixels());
+        recyclePixels(reusablePixels, frame.captionedPixels());
+        if (frame.pendingSubtitle() != null) {
+            recyclePixels(reusableSubtitleSources, frame.pendingSubtitle().takePixels());
+        }
     }
 
     /** A3 NOTE: Returns discarded queued pixel arrays to the pool when a seek or stop invalidates them. */
     private void discardPreparedFrames() {
         PreparedFrame frame;
         while ((frame = preparedFrames.poll()) != null) {
-            reusablePixels.offer(frame.pixels());
+            releasePreparedFrame(frame);
         }
     }
 
@@ -741,10 +823,10 @@ public class VideoPlayerModel {
                 continue;
             }
             if (stale) {
-                reusablePixels.offer(nextFrame.pixels());
+                releasePreparedFrame(nextFrame);
             } else {
                 if (latestDueFrame != null) {
-                    reusablePixels.offer(latestDueFrame.pixels());
+                    releasePreparedFrame(latestDueFrame);
                 }
                 latestDueFrame = nextFrame;
             }
@@ -775,6 +857,13 @@ public class VideoPlayerModel {
                 audioOutputStateChangedHandler.accept(audioStateChanged.enabled());
             } else if (event instanceof PlaybackEvent.PausedFrameReady preview) {
                 displayPreparedFrame(preview.frame());
+            } else if (event instanceof PlaybackEvent.SubtitleRendered rendered) {
+                if (rendered.frame() == displayedFrame
+                        && rendered.frame().playbackGeneration() == activePlaybackGeneration.get()) {
+                    lateSubtitle = rendered;
+                } else {
+                    reusablePixels.offer(rendered.pixels());
+                }
             } else if (event == PlaybackEvent.FrameCleared.INSTANCE) {
                 displayedMediaTimestampUs.set(NO_SEEK_REQUEST);
                 releaseDisplayedFrame();
@@ -788,7 +877,7 @@ public class VideoPlayerModel {
         }
     }
 
-    /** Copies pixels to the display and retains only the currently visible frame's background. */
+    /** Retains only the visible frame and selects its current CC version on JavaFX. */
     private void displayPreparedFrame(PreparedFrame frame) {
         boolean retained = false;
         try {
@@ -800,14 +889,12 @@ public class VideoPlayerModel {
                 displayImage = new WritableImage(frame.width(), frame.height());
                 displayImageGeneration = frame.playbackGeneration();
             }
-            displayImage.getPixelWriter().setPixels(0, 0, frame.width(), frame.height(),
-                    PixelFormat.getByteBgraPreInstance(), frame.pixels(), 0, frame.width() * DISPLAY_BYTES_PER_PIXEL);
             releaseDisplayedFrame();
             displayedFrame = frame;
             retained = true;
         } finally {
             if (!retained) {
-                reusablePixels.offer(frame.pixels());
+                releasePreparedFrame(frame);
             }
         }
         displayedTimestampUs.set(frame.logicalTimestampUs());
@@ -821,43 +908,88 @@ public class VideoPlayerModel {
 
     private void releaseDisplayedFrame() {
         if (displayedFrame != null) {
-            reusablePixels.offer(displayedFrame.pixels());
+            releasePreparedFrame(displayedFrame);
             displayedFrame = null;
+        }
+        if (lateSubtitle != null) {
+            reusablePixels.offer(lateSubtitle.pixels());
+            lateSubtitle = null;
         }
     }
 
     private void updateSubtitlePixels(boolean newFrame) {
         PreparedFrame frame = displayedFrame;
-        String text = frame != null && subtitlesEnabled.get() ? subtitleLoader.textAt(frame.mediaTimestampUs()) : "";
-        if (!newFrame && displayedSubtitleText.equals(text)) {
-            return;
-        }
+        String text = "";
         if (frame != null) {
-            int stride = frame.width() * DISPLAY_BYTES_PER_PIXEL;
-            var writer = displayImage.getPixelWriter();
-            if (!newFrame && paintedCaption != null) {
-                var previous = paintedCaption;
-                int source = previous.y() * stride + previous.x() * DISPLAY_BYTES_PER_PIXEL;
-                writer.setPixels(previous.x(), previous.y(), previous.width(), previous.height(),
-                        PixelFormat.getByteBgraPreInstance(), frame.pixels(), source, stride);
+            if (subtitlesEnabled.get() && frame.subtitleVersion() == requestedSubtitleVersion) {
+                text = subtitleLoader.textAt(frame.mediaTimestampUs());
             }
-            var caption = text.isEmpty() ? null : captionForDisplay(frame, text);
-            if (caption != null) {
-                int captionStride = caption.width() * DISPLAY_BYTES_PER_PIXEL;
-                int required = captionStride * caption.height();
-                if (subtitlePixels.length < required) {
-                    subtitlePixels = new byte[required];
-                }
-                caption.composite(frame.pixels(), stride, subtitlePixels);
-                writer.setPixels(caption.x(), caption.y(), caption.width(), caption.height(),
-                        PixelFormat.getByteBgraPreInstance(), subtitlePixels, 0, captionStride);
+            if (effectsFollowSubtitles) {
+                text = displayOrderedSubtitle(frame, text, newFrame);
+            } else {
+                displayFinalSubtitle(frame, text, newFrame);
             }
-            paintedCaption = caption;
         }
         if (!displayedSubtitleText.equals(text)) {
             displayedSubtitleText = text;
             subtitleTextChangedHandler.accept(text);
         }
+    }
+
+    private String displayOrderedSubtitle(PreparedFrame frame, String text, boolean newFrame) {
+        byte[] captionedPixels = null;
+        if (!text.isEmpty()) {
+            if (frame.captionedPixels() != null && frame.caption().text().equals(text)) {
+                captionedPixels = frame.captionedPixels();
+            } else if (lateSubtitle != null && lateSubtitle.text().equals(text)) {
+                captionedPixels = lateSubtitle.pixels();
+            } else if (frame.pendingSubtitle() != null && !shutdownRequested
+                    && frame.playbackGeneration() == activePlaybackGeneration.get()) {
+                byte[] sourcePixels = frame.pendingSubtitle().takePixels();
+                if (sourcePixels != null) {
+                    enqueueCommand(new PlaybackCommand.RenderSubtitle(frame, text, sourcePixels));
+                }
+            }
+        }
+        String visibleText = captionedPixels == null ? "" : text;
+        if (newFrame || !displayedSubtitleText.equals(visibleText)) {
+            writeDisplayPixels(frame, captionedPixels != null ? captionedPixels : frame.pixels());
+        }
+        return visibleText;
+    }
+
+    private void displayFinalSubtitle(PreparedFrame frame, String text, boolean newFrame) {
+        if (!newFrame && displayedSubtitleText.equals(text)) {
+            return;
+        }
+        int stride = frame.width() * DISPLAY_BYTES_PER_PIXEL;
+        var writer = displayImage.getPixelWriter();
+        if (newFrame) {
+            writeDisplayPixels(frame, frame.pixels());
+        } else if (paintedCaption != null) {
+            var previous = paintedCaption;
+            int source = previous.y() * stride + previous.x() * DISPLAY_BYTES_PER_PIXEL;
+            writer.setPixels(previous.x(), previous.y(), previous.width(), previous.height(),
+                    PixelFormat.getByteBgraPreInstance(), frame.pixels(), source, stride);
+        }
+        var caption = text.isEmpty() ? null : captionForDisplay(frame, text);
+        if (caption != null) {
+            int captionStride = caption.width() * DISPLAY_BYTES_PER_PIXEL;
+            int required = captionStride * caption.height();
+            if (subtitlePixels.length < required) {
+                subtitlePixels = new byte[required];
+            }
+            int layers = frameProcessors.size() - firstSubtitleProcessor;
+            caption.composite(frame.pixels(), stride, subtitlePixels, layers);
+            writer.setPixels(caption.x(), caption.y(), caption.width(), caption.height(),
+                    PixelFormat.getByteBgraPreInstance(), subtitlePixels, 0, captionStride);
+        }
+        paintedCaption = caption;
+    }
+
+    private void writeDisplayPixels(PreparedFrame frame, byte[] pixels) {
+        displayImage.getPixelWriter().setPixels(0, 0, frame.width(), frame.height(),
+                PixelFormat.getByteBgraPreInstance(), pixels, 0, frame.width() * DISPLAY_BYTES_PER_PIXEL);
     }
 
     private FrameSubtitler.Caption captionForDisplay(PreparedFrame frame, String text) {
@@ -1264,10 +1396,17 @@ public class VideoPlayerModel {
         return Math.max(0, durationUs - frameDurationUs);
     }
 
-    /** Effects stay sequential to preserve CLI order; each effect may parallelize only its independent rows. */
-    private void processFrame(Frame frame, InfoFrame info) throws Exception {
-        for (int index = 0; index < frameProcessors.size(); index++) {
+    /** Each stage completes before the next reads its pixels. */
+    private void processFrame(Frame frame, InfoFrame info, int start, int end, FrameSubtitler.Caption caption)
+            throws Exception {
+        for (int index = start; index < end; index++) {
             FrameProcessor processor = frameProcessors.get(index);
+            if (processor instanceof FrameSubtitler subtitler) {
+                if (caption == null) {
+                    continue;
+                }
+                subtitler.setCaption(caption);
+            }
             long processorStartedNs = playbackProfiler.enabled() ? System.nanoTime() : 0;
             processor.process(frame, info);
             if (playbackProfiler.enabled()) {

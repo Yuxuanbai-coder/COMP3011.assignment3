@@ -62,7 +62,8 @@ class CommandLineControllerTest {
                 new EffectOptionCase("-j", "--jitter-frames", FrameProcessorOption.JITTER_FRAMES, FrameJitterer.class),
                 new EffectOptionCase("-m", "--mottle-frames", FrameProcessorOption.MOTTLE_FRAMES, FrameMottler.class),
                 new EffectOptionCase("-b", "--bleed-frames", FrameProcessorOption.BLEED_FRAMES, FrameBleeder.class),
-                new EffectOptionCase("-p", "--pepper-frames", FrameProcessorOption.PEPPER_FRAMES, FramePepperer.class));
+                new EffectOptionCase("-p", "--pepper-frames", FrameProcessorOption.PEPPER_FRAMES, FramePepperer.class),
+                new EffectOptionCase("-S", "--subtitle-frames", FrameProcessorOption.SUBTITLE_FRAMES, FrameSubtitler.class));
 
         for (EffectOptionCase effect : cases) {
             assertParsedAs(effect.shortOption(), effect.option());
@@ -126,20 +127,31 @@ class CommandLineControllerTest {
     }
 
     @Test
-    // A3 NOTE: Both caption flag spellings must preserve visual effect order, repetition and lowercase scratch flags.
-    void keepsCaptionFlagsSeparateFromOrderedVisualEffects() {
+    // A3 NOTE: Either subtitle spelling stays in order and lowercase s still adds scratches.
+    void keepsCaptionFlagsInTheOrderedEffects() {
         for (String captionOption : List.of("-S", "--subtitle-frames")) {
-            var controller = parse("-j", captionOption, "-s", "-d", "-d", "-n");
+            var controller = parse("-j", captionOption, "-s", "-d", "-d", "-n", captionOption);
 
             assertNull(controller.getErrorMessage());
             assertTrue(controller.isSubtitlesRequested());
             assertEquals(List.of(
                     FrameProcessorOption.JITTER_FRAMES,
+                    FrameProcessorOption.SUBTITLE_FRAMES,
                     FrameProcessorOption.SCRATCH_FRAMES,
                     FrameProcessorOption.DUST_FRAMES,
                     FrameProcessorOption.DUST_FRAMES,
-                    FrameProcessorOption.NUMBER_FRAMES), controller.getFrameProcessorOptions());
+                    FrameProcessorOption.NUMBER_FRAMES,
+                    FrameProcessorOption.SUBTITLE_FRAMES), controller.getFrameProcessorOptions());
         }
+    }
+
+    @Test
+    void groupedSubtitleOptionsSurroundTheBleedProcessor() {
+        var controller = parse("-SbS");
+        assertNull(controller.getErrorMessage());
+        assertTrue(controller.isSubtitlesRequested());
+        assertEquals(List.of(FrameProcessorOption.SUBTITLE_FRAMES, FrameProcessorOption.BLEED_FRAMES,
+                FrameProcessorOption.SUBTITLE_FRAMES), controller.getFrameProcessorOptions());
     }
 
     @Test
@@ -193,7 +205,6 @@ class CommandLineControllerTest {
                 "  -x, --maximise     Open the player maximised",
                 "  -1, --monitor-1    Open the player on display 1",
                 "  -2, --monitor-2    Open the player on display 2",
-                "  -S, --subtitle-frames  Enable speech-to-text subtitles on startup",
                 "",
                 "Frame processors:",
                 "  -n, --number-frames    Render the frame number onto each frame",
@@ -207,6 +218,7 @@ class CommandLineControllerTest {
                 "  -m, --mottle-frames    Add cloudy emulsion mottling",
                 "  -b, --bleed-frames     Bleed light into frames",
                 "  -p, --pepper-frames    Pepper frames with dark spots/blotches",
+                "  -S, --subtitle-frames  Add speech-to-text subtitles to frames",
                 "",
                 "Frame processors are applied in command-line order and may be repeated.",
                 "Example: -nssnfwyvdjmbp numbers, scratches twice, numbers again, flickers,",

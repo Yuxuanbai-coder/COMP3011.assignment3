@@ -10,38 +10,37 @@ import java.awt.geom.AffineTransform;
 import java.awt.geom.Path2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
-import java.util.function.LongFunction;
+import java.nio.ByteBuffer;
 
 import org.bytedeco.javacv.Frame;
 
-/** Rasterizes each frame's cue for composition into the video. Developed with OpenAI Codex assistance. */
+/** Blends a subtitle mask into the current video frame. Developed with OpenAI Codex assistance. */
 final class FrameSubtitler extends FrameProcessor {
     private static final FontRenderContext FONT_CONTEXT = new FontRenderContext(null, true, true);
     private static final Font CAPTION_FONT = new Font(Font.SANS_SERIF, Font.BOLD, 1);
 
-    private final LongFunction<String> textAt;
     private Caption lastRaster;
-    private Caption preparedCaption;
+    private Caption caption;
 
-    FrameSubtitler(LongFunction<String> textAt) {
-        this.textAt = textAt;
+    void setCaption(Caption caption) {
+        this.caption = caption;
     }
 
     @Override
     public void process(Frame frame, InfoFrame info) {
-        String text = textAt.apply(info.timestampUs());
-        if (text.isEmpty()) {
-            preparedCaption = null;
-            return;
+        if (caption != null) {
+            caption.compositeInto(frame);
         }
-        if (lastRaster == null || !lastRaster.matches(text, frame.imageWidth, frame.imageHeight)) {
-            lastRaster = rasterize(text, frame.imageWidth, frame.imageHeight);
-        }
-        preparedCaption = lastRaster;
     }
 
-    Caption preparedCaption() {
-        return preparedCaption;
+    Caption prepareCaption(String text, int width, int height) {
+        if (text.isEmpty()) {
+            return null;
+        }
+        if (lastRaster == null || !lastRaster.matches(text, width, height)) {
+            lastRaster = rasterize(text, width, height);
+        }
+        return lastRaster;
     }
 
     static Caption rasterize(String text, int frameWidth, int frameHeight) {
@@ -94,13 +93,31 @@ final class FrameSubtitler extends FrameProcessor {
         return new Caption(text, frameWidth, frameHeight, left, y, width, height, pixels);
     }
 
-    /** Composites a small, premultiplied caption rectangle over opaque BGRA video pixels. */
+    /** Stores a small premultiplied caption rectangle for the worker or the JavaFX display. */
     record Caption(String text, int frameWidth, int frameHeight, int x, int y, int width, int height, int[] pixels) {
         boolean matches(String candidate, int width, int height) {
             return frameWidth == width && frameHeight == height && text.equals(candidate);
         }
 
-        void composite(byte[] frame, int frameStride, byte[] output) {
+        void compositeInto(Frame frame) {
+            ByteBuffer image = (ByteBuffer) frame.image[0];
+            int maskIndex = 0;
+            for (int row = 0; row < height; row++) {
+                int index = (y + row) * frame.imageStride + x * frame.imageChannels;
+                for (int column = 0; column < width; column++) {
+                    int pixel = pixels[maskIndex++];
+                    if (pixel != 0) {
+                        int uncovered = 255 - (pixel >>> 24);
+                        image.put(index, over(image.get(index), pixel & 255, uncovered));
+                        image.put(index + 1, over(image.get(index + 1), (pixel >>> 8) & 255, uncovered));
+                        image.put(index + 2, over(image.get(index + 2), (pixel >>> 16) & 255, uncovered));
+                    }
+                    index += frame.imageChannels;
+                }
+            }
+        }
+
+        void composite(byte[] frame, int frameStride, byte[] output, int layers) {
             int maskIndex = 0;
             int destination = 0;
             for (int row = 0; row < height; row++) {
@@ -108,13 +125,20 @@ final class FrameSubtitler extends FrameProcessor {
                 for (int column = 0; column < width; column++) {
                     int pixel = pixels[maskIndex++];
                     int uncovered = 255 - (pixel >>> 24);
-                    output[destination++] = over(frame[source++], pixel & 255, uncovered);
-                    output[destination++] = over(frame[source++], (pixel >>> 8) & 255, uncovered);
-                    output[destination++] = over(frame[source++], (pixel >>> 16) & 255, uncovered);
+                    output[destination++] = overRepeatedly(frame[source++], pixel & 255, uncovered, layers);
+                    output[destination++] = overRepeatedly(frame[source++], (pixel >>> 8) & 255, uncovered, layers);
+                    output[destination++] = overRepeatedly(frame[source++], (pixel >>> 16) & 255, uncovered, layers);
                     output[destination++] = (byte) 255;
                     source++;
                 }
             }
+        }
+
+        private static byte overRepeatedly(byte background, int foreground, int uncovered, int layers) {
+            for (int layer = 0; layer < layers; layer++) {
+                background = over(background, foreground, uncovered);
+            }
+            return background;
         }
 
         private static byte over(byte background, int foreground, int uncovered) {

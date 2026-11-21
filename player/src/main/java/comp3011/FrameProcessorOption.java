@@ -29,7 +29,8 @@ public enum FrameProcessorOption {
     JITTER_FRAMES('j', "--jitter-frames", FrameJitterer::new),
     MOTTLE_FRAMES('m', "--mottle-frames", FrameMottler::new),
     BLEED_FRAMES('b', "--bleed-frames", FrameBleeder::new),
-    PEPPER_FRAMES('p', "--pepper-frames", FramePepperer::new);
+    PEPPER_FRAMES('p', "--pepper-frames", FramePepperer::new),
+    SUBTITLE_FRAMES('S', "--subtitle-frames", FrameSubtitler::new);
 
     private final char shortName;
     private final String longName;

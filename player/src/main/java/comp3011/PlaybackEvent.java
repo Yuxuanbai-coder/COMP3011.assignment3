@@ -14,6 +14,9 @@ sealed interface PlaybackEvent {
     record PausedFrameReady(PreparedFrame frame) implements PlaybackEvent {
     }
 
+    record SubtitleRendered(PreparedFrame frame, String text, byte[] pixels) implements PlaybackEvent {
+    }
+
     enum FrameCleared implements PlaybackEvent {
         INSTANCE
     }

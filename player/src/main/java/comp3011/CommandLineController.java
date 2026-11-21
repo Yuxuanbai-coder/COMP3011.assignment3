@@ -26,8 +26,6 @@ import java.util.List;
 public class CommandLineController {
     private boolean helpRequested;
     private boolean audioRequested;
-    // Captions are composed after the requested visual effects, including when enabled during playback.
-    private boolean subtitlesRequested;
     private boolean maximiseRequested;
     private Integer displayId;
     private File videoFile;
@@ -66,7 +64,7 @@ public class CommandLineController {
 
     /** A3 NOTE: Reports whether -S or --subtitle-frames enables captions at startup. */
     public boolean isSubtitlesRequested() {
-        return subtitlesRequested;
+        return frameProcessorOptions.contains(FrameProcessorOption.SUBTITLE_FRAMES);
     }
 
     public boolean isMaximiseRequested() {
@@ -91,8 +89,6 @@ public class CommandLineController {
                 helpRequested = true;
             } else if ("--audio".equals(arg)) {
                 audioRequested = true;
-            } else if ("--subtitle-frames".equals(arg)) {
-                subtitlesRequested = true;
             } else if ("--maximise".equals(arg)) {
                 maximiseRequested = true;
             } else if ("--monitor-1".equals(arg)) {
@@ -141,8 +137,6 @@ public class CommandLineController {
             switch (shortName) {
                 case 'h' -> helpRequested = true;
                 case 'a' -> audioRequested = true;
-                // A3 NOTE: Uppercase S means subtitles; lowercase s remains the existing film-scratch effect.
-                case 'S' -> subtitlesRequested = true;
                 case 'x' -> maximiseRequested = true;
                 case '1' -> setDisplayId(1);
                 case '2' -> setDisplayId(2);
@@ -183,7 +177,6 @@ public class CommandLineController {
         System.out.println("  -x, --maximise     Open the player maximised");
         System.out.println("  -1, --monitor-1    Open the player on display 1");
         System.out.println("  -2, --monitor-2    Open the player on display 2");
-        System.out.println("  -S, --subtitle-frames  Enable speech-to-text subtitles on startup");
         System.out.println();
         System.out.println("Frame processors:");
         printFrameProcessorOption("-n, --number-frames", "Render the frame number onto each frame");
@@ -197,6 +190,7 @@ public class CommandLineController {
         printFrameProcessorOption("-m, --mottle-frames", "Add cloudy emulsion mottling");
         printFrameProcessorOption("-b, --bleed-frames", "Bleed light into frames");
         printFrameProcessorOption("-p, --pepper-frames", "Pepper frames with dark spots/blotches");
+        printFrameProcessorOption("-S, --subtitle-frames", "Add speech-to-text subtitles to frames");
         System.out.println();
         System.out.println("Frame processors are applied in command-line order and may be repeated.");
         System.out.println("Example: -nssnfwyvdjmbp numbers, scratches twice, numbers again, flickers,");
