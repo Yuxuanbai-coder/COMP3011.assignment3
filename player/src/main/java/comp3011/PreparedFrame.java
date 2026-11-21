@@ -7,7 +7,7 @@
 package comp3011;
 
 /**
- * Prepared pixels and their timing metadata, transferred to the JavaFX thread.
+ * A3 NOTE: Transfers owned BGRA pixels and timing to JavaFX; arrays are recycled after copying or discarding them.
  */
 record PreparedFrame(
         long playbackGeneration,
@@ -18,6 +18,7 @@ record PreparedFrame(
         long logicalTimestampUs,
         long targetTimeNs) {
 
+    /** A3 NOTE: Shifts the display deadline after a pause while keeping media time and pixel ownership unchanged. */
     PreparedFrame delayedBy(long pauseDurationNs) {
         return new PreparedFrame(playbackGeneration, pixels, width, height, mediaTimestampUs,
                 logicalTimestampUs, targetTimeNs + pauseDurationNs);

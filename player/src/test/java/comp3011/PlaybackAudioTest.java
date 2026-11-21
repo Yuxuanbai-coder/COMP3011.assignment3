@@ -18,11 +18,13 @@ import org.bytedeco.javacv.Frame;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+/** A3 NOTE: Measures decoded PCM for surround/stereo/mono playback without requiring an audio output device. */
 class PlaybackAudioTest {
     private static final int SAMPLE_RATE = 48_000;
     private static final int SAMPLE_COUNT = SAMPLE_RATE / 5;
 
     @Test
+    // A3 NOTE: A center-only surround source reproduces missing dialogue if stereo downmixing is removed.
     void mixesSurroundCenterDialogueIntoBothOutputChannels(@TempDir Path directory) throws Exception {
         Path source = writeAudio(directory, 6, 2);
 
@@ -35,6 +37,7 @@ class PlaybackAudioTest {
     }
 
     @Test
+    // A3 NOTE: Downmixing must not leak a normal left-only stereo signal into the silent right channel.
     void preservesStereoChannelSeparation(@TempDir Path directory) throws Exception {
         Path source = writeAudio(directory, 2, 0);
 
@@ -45,6 +48,7 @@ class PlaybackAudioTest {
     }
 
     @Test
+    // A3 NOTE: A mono source should be duplicated into both stereo output channels.
     void playsMonoThroughBothOutputChannels(@TempDir Path directory) throws Exception {
         Path source = writeAudio(directory, 1, 0);
 
@@ -54,6 +58,7 @@ class PlaybackAudioTest {
         assertTrue(energy[1] > 1_000_000, "Mono speech must reach the right speaker");
     }
 
+    /** A3 NOTE: Generates a deterministic tone in exactly one source channel to make mixing errors measurable. */
     private static Path writeAudio(Path directory, int channels, int activeChannel) throws Exception {
         byte[] pcm = new byte[SAMPLE_COUNT * channels * Short.BYTES];
         var samples = ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer();
@@ -71,6 +76,7 @@ class PlaybackAudioTest {
         return source;
     }
 
+    /** A3 NOTE: Exercises the production grabber and checks channel count, sample count and per-channel energy. */
     private static long[] decodeStereoEnergy(Path source) throws Exception {
         var output = new ByteArrayOutputStream();
         try (var grabber = VideoPlayerModel.createPlaybackGrabber(source.toFile())) {

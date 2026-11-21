@@ -12,16 +12,18 @@ import java.util.Optional;
 
 import tools.jackson.databind.json.JsonMapper;
 
-/** Persists complete subtitle tracks and the fingerprints needed to find an excerpt. */
+/** A3 NOTE: Persists complete subtitle tracks by audio content so renaming or excerpt playback can reuse captions. */
 final class SubtitleCache {
     private static final JsonMapper MAPPER = JsonMapper.builder().build();
     private static final int MAX_EXCERPT_CANDIDATES = 16;
     private final Path directory;
 
+    /** A3 NOTE: Keeps the cache location injectable so tests can use isolated temporary directories. */
     SubtitleCache(Path directory) {
         this.directory = directory;
     }
 
+    /** A3 NOTE: Tries the exact PCM digest first, then a bounded set of recent tracks for excerpt alignment. */
     Optional<List<SubtitleSegment>> find(AudioFingerprint fingerprint, long durationUs) throws InterruptedException {
         Path exactPath = path(fingerprint);
         var exact = read(exactPath);
@@ -53,6 +55,7 @@ final class SubtitleCache {
         return Optional.empty();
     }
 
+    /** A3 NOTE: Writes via a temporary file; an atomic replacement prevents readers from seeing partial JSON. */
     void save(AudioFingerprint fingerprint, List<SubtitleSegment> cues) {
         Path temporary = null;
         try {
@@ -78,10 +81,12 @@ final class SubtitleCache {
         }
     }
 
+    /** A3 NOTE: Keys files by decoded audio content rather than a video's name or folder. */
     private Path path(AudioFingerprint fingerprint) {
         return directory.resolve(fingerprint.digest() + ".json");
     }
 
+    /** A3 NOTE: Treats malformed or invalid cached data as a miss so online preparation can still proceed. */
     private static CachedTrack read(Path path) {
         if (!Files.isRegularFile(path)) {
             return null;
@@ -98,11 +103,13 @@ final class SubtitleCache {
         return null;
     }
 
+    /** A3 NOTE: Validates finite, increasing timestamps before trusting persisted subtitle cues. */
     private static boolean validCue(SubtitleSegment cue) {
         return cue != null && Double.isFinite(cue.start()) && Double.isFinite(cue.end())
                 && cue.start() >= 0 && cue.end() > cue.start() && cue.text() != null;
     }
 
+    /** A3 NOTE: Rebases source-video cues to the excerpt's clock and clips them to the selected video's duration. */
     private static List<SubtitleSegment> shiftAndTrim(List<SubtitleSegment> cues, long offsetUs, long durationUs) {
         double offset = offsetUs / 1_000_000.0;
         double duration = durationUs / 1_000_000.0;
@@ -117,6 +124,7 @@ final class SubtitleCache {
         return List.copyOf(shifted);
     }
 
+    /** A3 NOTE: Uses modification time to prioritize recent candidates; unreadable metadata sorts last. */
     private static long lastModified(Path path) {
         try {
             return Files.getLastModifiedTime(path).toMillis();
@@ -125,6 +133,7 @@ final class SubtitleCache {
         }
     }
 
+    /** A3 NOTE: Stores matching features together with display-ready cues; only complete tracks are saved. */
     private record CachedTrack(byte[] features, List<SubtitleSegment> cues) {
     }
 }

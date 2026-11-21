@@ -13,7 +13,7 @@ import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.OptionalLong;
 
-/** Identifies exact audio and lines up excerpts using their loudness and spectral changes. */
+/** A3 NOTE: Uses a PCM digest for exact cache hits and coarse audio features to align matching excerpts. */
 record AudioFingerprint(String digest, byte[] features) {
     private static final long STEP_US = 20_000;
     private static final int STEP_SAMPLES = (int) (AudioExtractor.SUBTITLE_SAMPLE_RATE * STEP_US / 1_000_000L);
@@ -21,6 +21,7 @@ record AudioFingerprint(String digest, byte[] features) {
     private static final int EDGE_FRAMES = 5;
     private static final int FEATURES_PER_FRAME = 2;
 
+    /** A3 NOTE: Hashes PCM bytes and stores loudness/sample-difference features every 20 ms. */
     static AudioFingerprint read(Path pcm) throws IOException, InterruptedException {
         MessageDigest digest = sha256();
         byte[] block = new byte[STEP_SAMPLES * Short.BYTES];
@@ -52,6 +53,7 @@ record AudioFingerprint(String digest, byte[] features) {
         return new AudioFingerprint(HexFormat.of().formatHex(digest.digest()), smooth(features.toByteArray()));
     }
 
+    /** A3 NOTE: Returns an excerpt's offset in microseconds only when its feature match is strong and unambiguous. */
     static OptionalLong findExcerpt(byte[] source, byte[] excerpt) throws InterruptedException {
         int excerptFrames = excerpt.length / FEATURES_PER_FRAME;
         int offsets = source.length / FEATURES_PER_FRAME - excerptFrames + 1;
@@ -73,6 +75,7 @@ record AudioFingerprint(String digest, byte[] features) {
                 bestOffset = offset;
             }
         }
+        // A3 NOTE: Verify the coarse search with denser anchors, then reject competing matches elsewhere.
         double best = scores[bestOffset];
         if (best > 4.0 || distance(source, excerpt, bestOffset, anchors(excerpt, 320)) > 4.0) {
             return OptionalLong.empty();
@@ -85,6 +88,7 @@ record AudioFingerprint(String digest, byte[] features) {
         return OptionalLong.of(bestOffset * STEP_US);
     }
 
+    /** A3 NOTE: Smooths each feature across adjacent frames to tolerate small alignment differences. */
     private static byte[] smooth(byte[] source) {
         byte[] result = source.clone();
         for (int i = FEATURES_PER_FRAME; i < source.length - FEATURES_PER_FRAME; i++) {
@@ -94,6 +98,7 @@ record AudioFingerprint(String digest, byte[] features) {
         return result;
     }
 
+    /** A3 NOTE: Samples audible interior frames, avoiding quiet/edge regions that provide weak matching evidence. */
     private static int[] anchors(byte[] source, int limit) {
         int span = source.length / FEATURES_PER_FRAME - 2 * EDGE_FRAMES;
         int count = Math.min(span, limit);
@@ -108,6 +113,7 @@ record AudioFingerprint(String digest, byte[] features) {
         return Arrays.copyOf(result, used);
     }
 
+    /** A3 NOTE: Rejects almost constant loudness patterns that could match many unrelated offsets. */
     private static boolean hasDistinctPattern(byte[] source, int[] anchors) {
         int min = 100;
         int max = 0;
@@ -119,6 +125,7 @@ record AudioFingerprint(String digest, byte[] features) {
         return max - min >= 10;
     }
 
+    /** A3 NOTE: Scores loudness and spectral-change differences, capping outliers to limit their influence. */
     private static double distance(byte[] source, byte[] excerpt, int offset, int[] anchors) {
         if (anchors.length == 0) {
             return Double.POSITIVE_INFINITY;
@@ -133,6 +140,7 @@ record AudioFingerprint(String digest, byte[] features) {
         return total / anchors.length;
     }
 
+    /** A3 NOTE: Creates an independent digest instance for each audio analysis. */
     private static MessageDigest sha256() {
         try {
             return MessageDigest.getInstance("SHA-256");
@@ -141,6 +149,7 @@ record AudioFingerprint(String digest, byte[] features) {
         }
     }
 
+    /** A3 NOTE: Stops long fingerprint searches promptly when the current video is replaced. */
     private static void checkInterrupted() throws InterruptedException {
         if (Thread.currentThread().isInterrupted()) {
             throw new InterruptedException();

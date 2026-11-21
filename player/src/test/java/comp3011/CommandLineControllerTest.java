@@ -52,7 +52,6 @@ class CommandLineControllerTest {
     @Test
     void parsesEveryShortAndLongEffectOptionAndCreatesItsProcessor() {
         List<EffectOptionCase> cases = List.of(
-                new EffectOptionCase("-S", "--subtitle-frames", FrameProcessorOption.SUBTITLE_FRAMES, FrameSubtitler.class),
                 new EffectOptionCase("-n", "--number-frames", FrameProcessorOption.NUMBER_FRAMES, FrameNumberer.class),
                 new EffectOptionCase("-s", "--scratch-frames", FrameProcessorOption.SCRATCH_FRAMES, FrameScratcher.class),
                 new EffectOptionCase("-f", "--flicker-frames", FrameProcessorOption.FLICKER_FRAMES, FrameFlickerer.class),
@@ -108,19 +107,39 @@ class CommandLineControllerTest {
 
     @Test
     void keepsExistingShortLaunchOptionsWorking() {
-        CommandLineController controller = parse("-ax1");
+        CommandLineController controller = parse("-aSx1");
 
         assertNull(controller.getErrorMessage());
         assertTrue(controller.isAudioRequested());
+        assertTrue(controller.isSubtitlesRequested());
         assertTrue(controller.isMaximiseRequested());
         assertEquals(1, controller.getDisplayId());
     }
 
     @Test
+    // A3 NOTE: Launching with no file is valid and leaves the initial caption choice for the file picker.
     void opensTheFilePickerPlayerWithoutAVideoArgument() {
         var controller = new CommandLineController(new String[0]);
         assertTrue(controller.shouldLaunchApplication());
         assertNull(controller.getVideoFile());
+        assertFalse(controller.isSubtitlesRequested());
+    }
+
+    @Test
+    // A3 NOTE: Both caption flag spellings must preserve visual effect order, repetition and lowercase scratch flags.
+    void keepsCaptionFlagsSeparateFromOrderedVisualEffects() {
+        for (String captionOption : List.of("-S", "--subtitle-frames")) {
+            var controller = parse("-j", captionOption, "-s", "-d", "-d", "-n");
+
+            assertNull(controller.getErrorMessage());
+            assertTrue(controller.isSubtitlesRequested());
+            assertEquals(List.of(
+                    FrameProcessorOption.JITTER_FRAMES,
+                    FrameProcessorOption.SCRATCH_FRAMES,
+                    FrameProcessorOption.DUST_FRAMES,
+                    FrameProcessorOption.DUST_FRAMES,
+                    FrameProcessorOption.NUMBER_FRAMES), controller.getFrameProcessorOptions());
+        }
     }
 
     @Test

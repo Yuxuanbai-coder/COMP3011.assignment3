@@ -32,6 +32,7 @@ public class HttpClientConfig {
 
         JdkClientHttpRequestFactory requestFactory =
                 new JdkClientHttpRequestFactory(httpClient);
+        // A3 NOTE: The shared upstream timeout leaves room for the player's own request deadline and retry handling.
         requestFactory.setReadTimeout(Duration.ofSeconds(25));
 
         return restClientBuilder

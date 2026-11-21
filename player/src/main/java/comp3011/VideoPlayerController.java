@@ -33,14 +33,17 @@ public class VideoPlayerController {
     private final VideoPlayerView view;
     private final BiConsumer<Integer, Integer> videoSizeChangedHandler;
 
+    /** A3 NOTE: Connects the caption loader, displayed-time properties, timeline and file-picker/CC actions. */
     public VideoPlayerController(
             boolean audioEnabled,
+            boolean subtitlesEnabled,
             List<FrameProcessorOption> frameProcessorOptions,
             BiConsumer<Integer, Integer> videoSizeChangedHandler) {
         this.view = new VideoPlayerView();
         this.videoSizeChangedHandler = videoSizeChangedHandler;
         model = new VideoPlayerModel(
                 audioEnabled,
+                subtitlesEnabled,
                 frameProcessorOptions,
                 this::onVideoSizeChanged,
                 this::onFrameReady,
@@ -50,6 +53,7 @@ public class VideoPlayerController {
                 view::setSubtitleText,
                 new SubtitleLoader());
 
+        // A3 NOTE: Read-only model properties drive the view; slider input is sent back as a worker command.
         view.setSeekHandler(model::seekToPosition);
         model.displayedDurationUsProperty().addListener((_, _, duration) -> view.setDuration(duration.longValue()));
         model.displayedMediaTimestampUsProperty().addListener((_, _, time) -> view.setPlayhead(time.longValue()));
@@ -110,6 +114,7 @@ public class VideoPlayerController {
         model.shutdown();
     }
 
+    /** A3 NOTE: Uses the native picker to accept paths with spaces and enables captions for the selected video. */
     private void openVideo() {
         FileChooser picker = new FileChooser();
         picker.setTitle("Open video with English subtitles");
@@ -175,6 +180,7 @@ public class VideoPlayerController {
         view.showAudioEnabled(audioOutputEnabled);
     }
 
+    /** A3 NOTE: Updates model preparation and the CC indicator for both button clicks and the S shortcut. */
     private void toggleSubtitles(){
         model.toggleSubtitles();
         System.out.println("Subtitles enabled: " + model.areSubtitlesEnabled());

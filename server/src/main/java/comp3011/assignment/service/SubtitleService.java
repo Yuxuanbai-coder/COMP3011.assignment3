@@ -19,6 +19,7 @@ import comp3011.assignment.api.SubtitleSegment;
 import comp3011.assignment.api.SubtitleWord;
 
 
+/** A3 NOTE: Converts uploaded English audio into timed subtitles and records upstream audio-second usage. */
 @Service
 public class SubtitleService {
 
@@ -27,6 +28,7 @@ public class SubtitleService {
     private final String transcriptionUrl;
     private final GlobalStatistics globalStatistics;
 
+    /** A3 NOTE: Injects the shared HTTP client, server-side key, upstream URL and process-wide usage counters. */
     public SubtitleService(
             RestClient transcriptionRestClient,
             @Value("${OPENAI_API_KEY:}") String apiKey,
@@ -38,6 +40,7 @@ public class SubtitleService {
         this.globalStatistics = globalStatistics;
     }
 
+    /** A3 NOTE: Requests verbose word/segment timestamps, filters likely silence and groups retained words by segment. */
     public SubtitleResponse transcribe(MultipartFile file) {
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException("OPENAI_API_KEY is not configured");
@@ -45,6 +48,7 @@ public class SubtitleService {
 
         MultiValueMap<String, Object> requestBody = new LinkedMultiValueMap<>();
         requestBody.add("file", file.getResource());
+        // A3 NOTE: Subtitle requests need timestamped verbose output, independently of the older plain-text endpoint.
         requestBody.add("model", "whisper-1");
         requestBody.add("response_format", "verbose_json");
         requestBody.add("timestamp_granularities[]", "word");
@@ -74,6 +78,7 @@ public class SubtitleService {
             throw new IllegalStateException("Transcription usage is unavailable");
         }
 
+        // A3 NOTE: Count the duration reported by each successful upstream response, including overlapping request audio.
         globalStatistics.addTranscriptionSeconds(usage.seconds());
 
         List<WhisperSegment> whisperSegments = response.segments() == null ? List.of() : response.segments();
@@ -81,6 +86,7 @@ public class SubtitleService {
         List<SubtitleSegment> subtitles = new ArrayList<>();
 
         for (WhisperSegment segment : whisperSegments) {
+            // A3 NOTE: Discard a segment only when both silence probability and low recognition confidence support it.
             if (segment.noSpeechProb() != null
                     && segment.avgLogProb() != null
                     && segment.noSpeechProb() > 0.6
@@ -89,6 +95,7 @@ public class SubtitleService {
             }
 
             List<SubtitleWord> words = whisperWords.stream().filter(word -> {
+                // A3 NOTE: A midpoint assigns a boundary word to one segment without duplicating it.
                 double midpoint = (word.start() + word.end()) / 2;
                 return midpoint >= segment.start() && midpoint < segment.end();
             }).toList();

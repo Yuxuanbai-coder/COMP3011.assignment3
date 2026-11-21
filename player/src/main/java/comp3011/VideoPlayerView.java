@@ -60,11 +60,13 @@ public class VideoPlayerView {
     private static final long MICROS_PER_SECOND = 1_000_000L;
 
     private final ImageView imageView = new ImageView();
+    // A3 NOTE: Captions are a separate JavaFX overlay, allowing text to change without reprocessing a paused frame.
     private final Group subtitleOverlay = new Group();
     private final Text subtitleText = new Text();
     private final Text[] subtitleOutline = new Text[8];
     private final Label statusLabel = new Label("No video loaded");
     private final Label subtitleStatusLabel = new Label();
+    // A3 NOTE: The slider uses seconds for display; seek callbacks convert its values to media microseconds.
     private final Slider playhead = new Slider(0, 1, 0);
     private final Label playbackTime = new Label("0:00 / --:--");
     private final Label tooltipLabel = new Label();
@@ -145,6 +147,7 @@ public class VideoPlayerView {
         return root;
     }
 
+    /** A3 NOTE: Exposes the file-picker action for controller wiring. */
     public Button getOpenVideoButton() {
         return openVideoButton;
     }
@@ -173,6 +176,7 @@ public class VideoPlayerView {
         return audioButton;
     }
     
+    /** A3 NOTE: Exposes the CC toggle separately from audio and frame-effect controls. */
     public Button getSubtitleButton(){
         return  subtitleButton;
     }
@@ -185,6 +189,7 @@ public class VideoPlayerView {
         imageView.setImage(image);
     }
 
+    /** A3 NOTE: Sends user click/release seeks while guarding against seeks caused by programmatic playhead updates. */
     void setSeekHandler(LongConsumer seek) {
         playhead.valueProperty().addListener((_, _, current) -> {
             updatePlaybackTime(current.doubleValue());
@@ -199,6 +204,7 @@ public class VideoPlayerView {
         });
     }
 
+    /** A3 NOTE: Rescales the timeline for a new video and disables seeking while its duration is unknown. */
     void setDuration(long durationUs) {
         this.durationUs = Math.max(0, durationUs);
         updatingPlayhead = true;
@@ -212,6 +218,7 @@ public class VideoPlayerView {
         updatePlaybackTime(playhead.getValue());
     }
 
+    /** A3 NOTE: Follows displayed frames without fighting a user's active slider drag. */
     void setPlayhead(long timestampUs) {
         double position = Math.max(0, timestampUs) / (double) MICROS_PER_SECOND;
         if (durationUs == 0) {
@@ -225,6 +232,7 @@ public class VideoPlayerView {
         }
     }
 
+    /** A3 NOTE: Updates the time label only when its displayed whole second changes. */
     private void updatePlaybackTime(double position) {
         long seconds = (long) position;
         if (seconds != displayedSecond) {
@@ -234,10 +242,12 @@ public class VideoPlayerView {
         }
     }
 
+    /** A3 NOTE: Formats timeline seconds as minutes:seconds using stable, locale-independent digits. */
     private static String formatTime(long seconds) {
         return String.format(Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60);
     }
 
+    /** A3 NOTE: Maps loader states to preparation/retry/error labels, hiding the label when captions are ready or off. */
     void setSubtitleProgress(SubtitleLoader.Progress progress) {
         String parts = progress.total() > 0 ? " (" + progress.completed() + "/" + progress.total() + ")" : "";
         String status = switch (progress.state()) {
@@ -251,11 +261,13 @@ public class VideoPlayerView {
         subtitleStatusLabel.setVisible(!status.isEmpty());
     }
 
+    /** A3 NOTE: Updates only the caption text and layout; the underlying video pixels stay untouched. */
     public void setSubtitleText(String text) {
         subtitleText.setText(text);
         layoutSubtitle();
     }
 
+    /** A3 NOTE: Uses white glyphs with eight black offset copies for readable outlines and cached text rendering. */
     private void configureSubtitles() {
         subtitleOverlay.setManaged(false);
         subtitleOverlay.setMouseTransparent(true);
@@ -280,6 +292,7 @@ public class VideoPlayerView {
         imageView.boundsInParentProperty().addListener((_, _, _) -> layoutSubtitle());
     }
 
+    /** A3 NOTE: Positions captions inside the actual displayed image, accounting for letterboxing and long lines. */
     private void layoutSubtitle() {
         Bounds video = imageView.getBoundsInParent();
         if (subtitleText.getText().isEmpty() || imageView.getImage() == null
@@ -301,6 +314,7 @@ public class VideoPlayerView {
         subtitleOverlay.setVisible(true);
     }
 
+    /** A3 NOTE: Scales the bold font and outline offsets together as the displayed video size changes. */
     private void resizeSubtitle(double size) {
         subtitleText.setFont(Font.font("SansSerif", FontWeight.BOLD, size));
         double radius = size / 12;
@@ -538,6 +552,7 @@ public class VideoPlayerView {
         return line;
     }
 
+    /** A3 NOTE: Keeps the CC icon and accessible label consistent with the model's caption switch. */
     public void showSubtitlesEnabled(boolean enabled) {
         Label icon = new Label(enabled ? "CC" : "CC×");
         icon.setMouseTransparent(true);

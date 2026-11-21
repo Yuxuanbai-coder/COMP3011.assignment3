@@ -11,77 +11,23 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Optional;
-import java.util.OptionalLong;
 
 import javax.sound.sampled.AudioFileFormat;
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.AudioSystem;
 
-import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_AAC;
 import static org.bytedeco.ffmpeg.global.avutil.AV_NOPTS_VALUE;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
-import org.bytedeco.javacv.FFmpegFrameRecorder;
 import org.bytedeco.javacv.Frame;
 import org.bytedeco.javacv.FrameGrabber;
 
+/** A3 NOTE: Decodes one 16 kHz mono PCM track, then copies lossless WAV windows for subtitle requests. */
 public class AudioExtractor {
     static final int SUBTITLE_SAMPLE_RATE = 16_000;
     private static final int TIMESTAMP_ROUNDING_SAMPLES = SUBTITLE_SAMPLE_RATE / 500;
 
-    public static Path extract(
-            Path videoFile, Path audioFile, long maxSeconds) throws Exception {
-        if (extractChunk(videoFile, audioFile, 0, Math.multiplyExact(maxSeconds, 1_000_000L)).isEmpty()) {
-            throw new IllegalStateException("No audio samples found");
-        }
-        return audioFile;
-    }
-
-    /** Encodes one time window and returns the first encoded sample's position in the video. */
-    static OptionalLong extractChunk(Path videoFile, Path audioFile, long startUs, long durationUs)
-            throws Exception {
-        long endUs = validateWindow(audioFile, startUs, durationUs);
-        checkInterrupted();
-        try (FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(videoFile.toFile())) {
-            grabber.start();
-            if (!grabber.hasAudio()) {
-                return OptionalLong.empty();
-            }
-
-            long originUs = mediaStartUs(grabber);
-            if (startUs > 1_000_000L) {
-                // Start a little early and discard decoded packets before the requested window.
-                grabber.setTimestamp(startUs - 1_000_000L);
-            }
-            Frame frame;
-            do {
-                checkInterrupted();
-                frame = grabber.grabSamples();
-            } while (frame != null && frame.timestamp - originUs < startUs);
-            if (frame == null || frame.timestamp - originUs >= endUs) {
-                return OptionalLong.empty();
-            }
-
-            long firstTimestampUs = frame.timestamp - originUs;
-            try (FFmpegFrameRecorder recorder = new FFmpegFrameRecorder(audioFile.toFile(), 1)) {
-                recorder.setSampleRate(SUBTITLE_SAMPLE_RATE);
-                recorder.setFormat("mp4");
-                recorder.setAudioCodec(AV_CODEC_ID_AAC);
-                recorder.setAudioBitrate(32_000);
-                recorder.start();
-
-                while (frame != null && frame.timestamp - originUs < endUs) {
-                    checkInterrupted();
-                    recorder.recordSamples(frame.sampleRate, frame.audioChannels, frame.samples);
-                    frame = grabber.grabSamples();
-                }
-                recorder.stop();
-            }
-            return OptionalLong.of(firstTimestampUs);
-        }
-    }
-
-    /** Decodes mono PCM once, with gaps preserved at their position on the media timeline. */
+    /** A3 NOTE: Decodes once for all workers; inserted silence keeps sample offsets on the video's timeline. */
     static long decodeSubtitleAudio(Path videoFile, Path pcmFile, long durationUs)
             throws Exception {
         long sampleLimit = durationUs > 0 ? samplesAt(durationUs) : Long.MAX_VALUE;
@@ -136,7 +82,7 @@ public class AudioExtractor {
         return Math.round(filledUntil * (1_000_000.0 / SUBTITLE_SAMPLE_RATE));
     }
 
-    /** Writes one WAV window from the already decoded audio. */
+    /** A3 NOTE: Copies a microsecond-based window to WAV and measures its audio activity without re-decoding. */
     static Optional<SubtitleAudio> writeSubtitleChunk(Path pcmFile, Path audioFile, long startUs, long durationUs)
             throws IOException, InterruptedException {
         validateWindow(audioFile, startUs, durationUs);
@@ -160,46 +106,36 @@ public class AudioExtractor {
         return Optional.of(new SubtitleAudio(startUs, AudioActivity.fromPcm(pcm, SUBTITLE_SAMPLE_RATE)));
     }
 
-    private static long validateWindow(Path audioFile, long startUs, long durationUs) {
+    /** A3 NOTE: Rejects invalid/overflowing windows and prevents overwriting an existing output file. */
+    private static void validateWindow(Path audioFile, long startUs, long durationUs) {
         if (startUs < 0 || durationUs <= 0) {
             throw new IllegalArgumentException("Invalid audio extraction window");
         }
         if (Files.exists(audioFile)) {
             throw new IllegalArgumentException("Output file already exists: " + audioFile);
         }
-        return Math.addExact(startUs, durationUs);
+        Math.addExact(startUs, durationUs);
     }
 
+    /** A3 NOTE: Converts media microseconds to sample positions at the fixed subtitle sample rate. */
     private static long samplesAt(long timestampUs) {
         return Math.round(timestampUs * (SUBTITLE_SAMPLE_RATE / 1_000_000.0));
     }
 
+    /** A3 NOTE: Removes a container's nonzero timestamp origin so playback and subtitle time both start at zero. */
     static long mediaStartUs(FFmpegFrameGrabber grabber) {
         long startUs = grabber.getFormatContext().start_time();
         return startUs == AV_NOPTS_VALUE ? 0 : startUs;
     }
 
+    /** A3 NOTE: Couples the clip's media offset with the activity mask used to validate returned cue times. */
     record SubtitleAudio(long startUs, AudioActivity activity) {
     }
 
+    /** A3 NOTE: Lets video changes and shutdown cancel lengthy native decode/copy loops cooperatively. */
     private static void checkInterrupted() throws InterruptedException {
         if (Thread.currentThread().isInterrupted()) {
             throw new InterruptedException();
         }
-    }
-
-    public static void main(String[] args) throws Exception {
-        if (args.length != 2) {
-            System.out.println("Usage: AudioExtractor <video-file> <audio-file>");
-            return;
-        }
-
-        Path videoFile = Path.of(args[0]);
-        Path audioFile = Path.of(args[1]);
-
-        Path result = extract(videoFile, audioFile, 20);
-
-        System.out.println("Audio saved to: " + result.toAbsolutePath());
-        System.out.println("Size: " + Files.size(result) + " bytes");
     }
 }

@@ -39,9 +39,6 @@ public abstract class FrameProcessor {
 
     protected InfoVideo videoInfo;
 
-    public FrameProcessor() {
-    }
-
     public void initialise(InfoVideo videoInfo) throws Exception {
         this.videoInfo = videoInfo;
     }

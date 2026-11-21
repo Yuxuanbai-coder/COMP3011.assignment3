@@ -37,6 +37,7 @@ public class AudioPlayer implements AutoCloseable {
     private static final int AUDIO_WARMUP_BYTES = 4096;
 
     private SourceDataLine line; // Java Sound's audio-output interface - for us a destination, not a source.
+    // A3 NOTE: This state belongs to the audio-output worker and preserves the device queue across pauses.
     private boolean paused;
 
     public void open(int sampleRate, int channels) throws LineUnavailableException {
@@ -131,7 +132,7 @@ public class AudioPlayer implements AutoCloseable {
         return written;
     }
 
-    /** Changes playback state while leaving unplayed samples in the device buffer. */
+    /** A3 NOTE: Stops/starts the device without flushing unplayed samples, preventing missing speech after resume. */
     public void setPaused(boolean paused) {
         if (line == null || this.paused == paused) {
             return;

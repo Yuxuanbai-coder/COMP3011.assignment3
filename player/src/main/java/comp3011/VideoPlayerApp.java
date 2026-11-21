@@ -42,10 +42,12 @@ public class VideoPlayerApp extends Application {
     @Override
     public void start(Stage stage) {
         this.stage = stage;
+        // A3 NOTE: Launching without a path opens a file-picker-ready window with audio enabled by default.
         boolean noVideo = commandLineController.getVideoFile() == null;
 
         controller = new VideoPlayerController(
                 commandLineController.isAudioRequested() || noVideo,
+                commandLineController.isSubtitlesRequested(),
                 commandLineController.getFrameProcessorOptions(),
                 this::setVideoSize);
 
@@ -58,6 +60,7 @@ public class VideoPlayerApp extends Application {
         moveToSelectedScreen(stage);
         stage.setMaximized(commandLineController.isMaximiseRequested());
         stage.show();
+        // A3 NOTE: Focus the player root so playback and caption shortcuts work immediately.
         scene.getRoot().requestFocus();
 
         stage.outputScaleXProperty().addListener((_, _, _) -> updateVideoSize());

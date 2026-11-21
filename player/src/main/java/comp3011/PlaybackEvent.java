@@ -10,6 +10,7 @@ package comp3011;
  * Immutable notifications sent from the playback worker to the JavaFX thread.
  */
 sealed interface PlaybackEvent {
+    /** A3 NOTE: Sends a seek preview to JavaFX even when normal timed playback is paused. */
     record PausedFrameReady(PreparedFrame frame) implements PlaybackEvent {
     }
 
@@ -21,6 +22,7 @@ sealed interface PlaybackEvent {
         INSTANCE
     }
 
+    /** A3 NOTE: Publishes video dimensions and duration together so the UI can initialize its timeline. */
     record MediaOpened(int width, int height, long durationUs) implements PlaybackEvent {
     }
 

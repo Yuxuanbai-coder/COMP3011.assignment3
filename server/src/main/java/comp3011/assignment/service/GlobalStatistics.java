@@ -20,6 +20,7 @@ public class GlobalStatistics {
 
     private final LongAdder inputTokens = new LongAdder();
     private final LongAdder outputTokens = new LongAdder();
+    // A3 NOTE: Concurrent subtitle requests add audio seconds separately from the existing token counters.
     private final DoubleAdder transcriptionSeconds = new DoubleAdder();
 
     /**
@@ -37,6 +38,7 @@ public class GlobalStatistics {
         outputTokens.add(outputTokenCount);
     }
 
+    /** A3 NOTE: Accumulates only finite, nonnegative upstream durations for the current server process. */
     public void addTranscriptionSeconds(double seconds) {
         if (!Double.isFinite(seconds) || seconds < 0) {
             throw new IllegalArgumentException("Invalid transcription usage");
@@ -53,6 +55,7 @@ public class GlobalStatistics {
     public GlobalStatsResponse snapshot() {
         return new GlobalStatsResponse(inputTokens.sum(), outputTokens.sum());
     }
+    /** A3 NOTE: Returns the cumulative audio seconds exposed through /api/v1/global/usage. */
     public double getTranscriptionSeconds() {
         return transcriptionSeconds.sum();
     }

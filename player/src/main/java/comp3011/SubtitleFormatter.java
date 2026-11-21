@@ -4,21 +4,24 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-/** Formats timed cues on the video's clock. Developed with OpenAI Codex assistance. */
+/** A3 NOTE: Builds readable video-timed cues from clip-relative speech results. Developed with OpenAI Codex assistance. */
 final class SubtitleFormatter {
     private static final int LINE_LENGTH = 42;
     private static final double MIN_CUE_SECONDS = 1;
     private static final double MAX_CUE_SECONDS = 7;
     private static final double PHRASE_GAP_SECONDS = 0.7;
 
+    // A3 NOTE: This class groups pure formatting functions and has no instance state.
     private SubtitleFormatter() {
     }
 
+    /** A3 NOTE: Formats segment/word timing when no decoded audio activity mask is available. */
     static List<SubtitleSegment> format(
             List<SubtitleSegment> segments, long audioStartUs, long windowStartUs, long windowEndUs) {
         return format(segments, audioStartUs, windowStartUs, windowEndUs, null);
     }
 
+    /** A3 NOTE: Applies clip offsets/window bounds, filters silent-region cues and limits duration/line overlap. */
     static List<SubtitleSegment> format(
             List<SubtitleSegment> segments, long audioStartUs, long windowStartUs, long windowEndUs,
             AudioActivity activity) {
@@ -62,6 +65,7 @@ final class SubtitleFormatter {
         return List.copyOf(result);
     }
 
+    /** A3 NOTE: Uses word midpoints to assign overlap-boundary words once, then splits phrases at pauses/size limits. */
     private static void addTimedCues(
             List<SubtitleSegment> cues, List<TimedWord> words, double offset, double windowStart, double windowEnd) {
         StringBuilder phrase = new StringBuilder();
@@ -92,7 +96,7 @@ final class SubtitleFormatter {
         }
     }
 
-    /** Maps word times back to the segment spelling, punctuation and spacing. */
+    /** A3 NOTE: Keeps segment punctuation/spacing while applying valid word times; falls back if alignment is unsafe. */
     private static List<TimedWord> alignWords(SubtitleSegment segment) {
         if (segment.words() == null || segment.words().isEmpty()) {
             return List.of();
@@ -127,6 +131,7 @@ final class SubtitleFormatter {
         return result;
     }
 
+    /** A3 NOTE: Matches spoken words case-insensitively while allowing intervening punctuation. */
     private static int findWord(String text, String word, int cursor) {
         while (cursor <= text.length() - word.length()) {
             if (text.regionMatches(true, cursor, word, 0, word.length())) {
@@ -141,6 +146,7 @@ final class SubtitleFormatter {
         return -1;
     }
 
+    /** A3 NOTE: Divides wrapped text into at most two lines per cue and distributes the available segment time. */
     private static void addPages(List<SubtitleSegment> cues, String text, double start, double end) {
         List<String> lines = wrap(text);
         int pages = (lines.size() + 1) / 2;
@@ -153,6 +159,7 @@ final class SubtitleFormatter {
         }
     }
 
+    /** A3 NOTE: Wraps at 42 Unicode code points, preferring punctuation or spaces over cutting words. */
     private static List<String> wrap(String input) {
         String remaining = input.replaceAll("(?U)\\s+", " ").strip();
         List<String> lines = new ArrayList<>();
@@ -186,6 +193,7 @@ final class SubtitleFormatter {
         return lines;
     }
 
+    /** A3 NOTE: Associates exact display text with recognized word times while preserving punctuation. */
     private record TimedWord(double start, double end, String text) {
     }
 }

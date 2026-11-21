@@ -8,7 +8,6 @@ const transcriptionText = document.querySelector('#transcription');
 
 let mediaRecorder;
 let audioChunks = [];
-let audioBlob;
 let previewUrl;
 
 function setStatus(message, isError = false) {
@@ -37,7 +36,7 @@ async function uploadAudio(blob) {
     let responseBody;
     try {
         responseBody = await response.json();
-    } catch (error) {
+    } catch {
         throw new Error(`The server returned an invalid response (${response.status}).`);
     }
 
@@ -70,7 +69,7 @@ startButton.addEventListener('click', async () => {
         });
 
         mediaRecorder.addEventListener('stop', () => {
-            audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+            const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
             if (previewUrl) URL.revokeObjectURL(previewUrl);
             previewUrl = URL.createObjectURL(audioBlob);
             audioPreview.src = previewUrl;

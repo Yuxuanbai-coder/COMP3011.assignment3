@@ -3,7 +3,7 @@ package comp3011;
 import java.nio.ShortBuffer;
 import java.util.BitSet;
 
-/** Records where decoded audio rises above near-digital silence. */
+/** A3 NOTE: Measures audible PCM slices to skip silent uploads and reject cues over silence; this is not speech recognition. */
 final class AudioActivity {
     private static final long SLICE_US = 25_000;
     private static final long TIMING_MARGIN_US = 50_000;
@@ -16,6 +16,7 @@ final class AudioActivity {
 
     private final BitSet audibleSlices = new BitSet();
 
+    /** A3 NOTE: Marks each 25 ms slice containing a sample above the near-silence threshold. */
     static AudioActivity fromPcm(ShortBuffer samples, int sampleRate) {
         var activity = new AudioActivity();
         int samplesPerSlice = (int) (sampleRate * SLICE_US / 1_000_000L);
@@ -31,10 +32,12 @@ final class AudioActivity {
         return activity;
     }
 
+    /** A3 NOTE: A completely silent window can finish without an online transcription request. */
     boolean containsSignal() {
         return !audibleSlices.isEmpty();
     }
 
+    /** A3 NOTE: Finds sustained sound after a quiet opening, retaining preroll for an empty-result retry. */
     long retryAfterQuietLeadUs() {
         int first = audibleSlices.nextSetBit(0);
         while (first >= 0) {
@@ -48,6 +51,7 @@ final class AudioActivity {
         return 0;
     }
 
+    /** A3 NOTE: Checks for enough audible samples near a proposed cue, allowing small timing errors. */
     boolean supportsCue(double startSeconds, double endSeconds) {
         long startUs = Math.round(startSeconds * 1_000_000);
         long endUs = Math.round(endSeconds * 1_000_000);

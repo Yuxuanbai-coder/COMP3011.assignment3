@@ -16,7 +16,9 @@ import javax.sound.sampled.AudioSystem;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+/** A3 NOTE: Uses generated PCM to verify sample-exact window extraction without a downloaded video. */
 class AudioExtractorTest {
+    // A3 NOTE: A known sample ramp detects shifted/truncated audio, beyond merely checking the output duration.
     @Test
     void copiesTheExactPcmSamplesAtTheRequestedPosition(@TempDir Path folder) throws Exception {
         int rate = 16_000;

@@ -22,8 +22,10 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+/** A3 NOTE: Uses generated audio and fake asynchronous responses to test preparation without API calls. */
 class SubtitleLoaderTest {
     @Test
+    // A3 NOTE: Return an empty first response, then verify retry audio starts near the later sustained signal.
     void retriesAnEmptyWindowAfterItsQuietOpening(@TempDir Path directory) throws Exception {
         int rate = 16_000;
         int sampleCount = 8 * rate;
@@ -74,6 +76,7 @@ class SubtitleLoaderTest {
 
     @ParameterizedTest
     @ValueSource(longs = {130_000_000L, -1})
+    // A3 NOTE: A latch holds the first three jobs so concurrency and whole-track preparation can be checked.
     void preparesBeginningMiddleAndEndWhilePlayheadStaysAtTheBeginning(
             long durationUs, @TempDir Path directory) throws Exception {
         int sampleRate = 16_000;
@@ -122,6 +125,7 @@ class SubtitleLoaderTest {
         }
     }
 
+    /** A3 NOTE: Bounds asynchronous test waiting so a stuck worker becomes a test failure rather than a hang. */
     private static void awaitPreparation(SubtitleLoader loader) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (loader.progress().state() == SubtitleLoader.State.LOADING && System.nanoTime() < deadline) {

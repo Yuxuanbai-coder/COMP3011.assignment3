@@ -9,9 +9,10 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-/** Covers subtitle timing and line limits. Developed with OpenAI Codex assistance. */
+/** A3 NOTE: Checks caption timing, overlap ownership and readable Unicode layout. Developed with OpenAI Codex assistance. */
 class SubtitleFormatterTest {
     @Test
+    // A3 NOTE: An untimed final word must retain its spelling while valid earlier word times remain usable.
     void keepsTimedWordsAtTheWindowBoundaryWhenTheFinalWordHasNoTimestamp() {
         var segment = new SubtitleSegment(0, 4.5, "Before the turn, follow the yellow road.", List.of(
                 new SubtitleWord("Before", 0, 0.3), new SubtitleWord("the", 0.3, 0.5),
@@ -23,6 +24,7 @@ class SubtitleFormatterTest {
     }
 
     @Test
+    // A3 NOTE: Synthetic silence/activity distinguishes a likely invented cue from a cue over audible samples.
     void omitsRecognizedTextOnlyInSilentRanges() {
         int sampleRate = 16_000;
         short[] samples = new short[3 * sampleRate];
@@ -36,6 +38,7 @@ class SubtitleFormatterTest {
     }
 
     @Test
+    // A3 NOTE: A clip-relative short cue must receive the video offset and enough display time to be readable.
     void holdsShortDialogueAtItsPositionInTheVideo() {
         var cues = SubtitleFormatter.format(List.of(new SubtitleSegment(0.5, 0.6, "Hello")),
                 40_000_000L, 40_000_000L, 60_000_000L);
@@ -44,6 +47,7 @@ class SubtitleFormatterTest {
     }
 
     @Test
+    // A3 NOTE: Include emoji and non-Latin characters to catch surrogate splitting and lost text.
     void splitsLongTextIntoReadableCuesWithoutLosingCharacters() {
         String text = "\u5b57\u5e55\ud83c\udfa5".repeat(50);
         var cues = SubtitleFormatter.format(List.of(new SubtitleSegment(0, 12, text)), 0, 0, 20_000_000L);
@@ -63,6 +67,7 @@ class SubtitleFormatterTest {
     }
 
     @Test
+    // A3 NOTE: A long pause should separate phrases using actual word timestamps and the requested window.
     void usesRealWordTimesOnEitherSideOfAPause() {
         var speech = new SubtitleSegment(0.5, 7.2, "Hello, world! I’m back.", List.of(
                 new SubtitleWord("hello", 0.5, 0.7), new SubtitleWord("world", 0.7, 1.0),
@@ -77,6 +82,7 @@ class SubtitleFormatterTest {
     }
 
     @Test
+    // A3 NOTE: Overlapping request audio must not cause the same boundary word to appear in two windows.
     void givesABoundaryWordToOnlyOneWindow() {
         var speech = new SubtitleSegment(0.1, 1.4, "Before, boundary.", List.of(
                 new SubtitleWord("Before", 0.1, 0.4), new SubtitleWord("boundary", 0.95, 1.4)));

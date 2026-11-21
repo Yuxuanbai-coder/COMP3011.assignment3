@@ -101,8 +101,6 @@ public class TranscriptionService {
                     response.usage().outputTokens());
 
             return response.text();
-        } catch (TranscriptionServiceException exception) {
-            throw exception;
         } catch (RestClientException exception) {
             throw new TranscriptionServiceException(
                     "Speech-to-text service request failed", exception);

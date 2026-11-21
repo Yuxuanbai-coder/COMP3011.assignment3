@@ -16,6 +16,7 @@ import java.util.concurrent.CompletableFuture;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
+/** A3 NOTE: Uploads audio asynchronously to the local subtitle server; the API key stays on the server. */
 public class SubtitleClient {
 
     private final HttpClient httpClient = HttpClient.newBuilder()
@@ -25,20 +26,23 @@ public class SubtitleClient {
     private final URI endpoint;
     private final ObjectMapper mapper = JsonMapper.builder().build();
 
+    /** A3 NOTE: Uses the local service by default for the normal two-process setup. */
     public SubtitleClient() {
         this(URI.create("http://localhost:8080/api/v1/subtitles"));
     }
 
+    /** A3 NOTE: Allows another service address to be supplied without changing the upload code. */
     public SubtitleClient(URI endpoint) {
         this.endpoint = endpoint;
     }
 
+    /** A3 NOTE: Selects the audio MIME type and converts the JSON response to an immutable cue list. */
     public CompletableFuture<List<SubtitleSegment>> requestSubtitles(Path audioFile) throws IOException {
         String name = audioFile.getFileName().toString().toLowerCase(Locale.ROOT);
         CompletableFuture<String> request = switch (name.substring(name.lastIndexOf('.') + 1)) {
             case "flac" -> sendAudio(audioFile, "audio.flac", "audio/flac");
             case "wav" -> sendAudio(audioFile, "audio.wav", "audio/wav");
-            default -> sendM4a(audioFile);
+            default -> sendAudio(audioFile, "audio.m4a", "audio/mp4");
         };
         return request.thenApply(json -> {
             SubtitleResponse response = mapper.readValue(json, SubtitleResponse.class);
@@ -49,10 +53,7 @@ public class SubtitleClient {
         });
     }
 
-    public CompletableFuture<String> sendM4a(Path audioFile) throws IOException {
-        return sendAudio(audioFile, "audio.m4a", "audio/mp4");
-    }
-
+    /** A3 NOTE: Streams multipart audio with a unique boundary and bounds how long an HTTP request can wait. */
     private CompletableFuture<String> sendAudio(Path audioFile, String filename, String contentType)
             throws IOException {
         String boundary = "----subtitle-" + UUID.randomUUID();
@@ -92,6 +93,7 @@ public class SubtitleClient {
         });
     }
 
+    /** A3 NOTE: Retains the HTTP status so the loader can distinguish temporary service errors from other failures. */
     static final class RequestFailed extends RuntimeException {
         private final int status;
 
@@ -100,6 +102,7 @@ public class SubtitleClient {
             this.status = status;
         }
 
+        /** A3 NOTE: Rate limiting and server failures may recover within the loader's bounded retry budget. */
         boolean retryable() {
             return status == 429 || status >= 500;
         }

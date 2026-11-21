@@ -83,6 +83,7 @@ public class AdminController {
         return globalStatistics.snapshot();
     }
 
+    /** A3 NOTE: Reports audio seconds since startup; replaying a fully cached track sends no new subtitle requests. */
     @GetMapping("/api/v1/global/usage")
     public UsageResponse getGlobalUsage() {
         return new UsageResponse(globalStatistics.getTranscriptionSeconds());

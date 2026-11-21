@@ -13,8 +13,10 @@ import java.util.Random;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+/** A3 NOTE: Verifies content-based cache reuse across renaming and excerpt offsets, with unrelated audio rejected. */
 class SubtitleCacheTest {
     @Test
+    // A3 NOTE: Recreate the cache object to check disk persistence, then test an excerpt with a small gain change.
     void reopensACompletedTrackByAudioContentAndRebasesAnExcerpt(@TempDir Path directory) throws Exception {
         var source = patternedAudio(20, 2430);
         Path original = directory.resolve("original.pcm");
@@ -48,6 +50,7 @@ class SubtitleCacheTest {
         assertTrue(cache.find(AudioFingerprint.read(unrelated), 8_000_000).isEmpty());
     }
 
+    /** A3 NOTE: Seeded loudness/frequency changes create reproducible, distinguishable fingerprint patterns. */
     private static ByteBuffer patternedAudio(int seconds, int seed) {
         int rate = AudioExtractor.SUBTITLE_SAMPLE_RATE;
         var audio = ByteBuffer.allocate(seconds * rate * Short.BYTES).order(ByteOrder.LITTLE_ENDIAN);

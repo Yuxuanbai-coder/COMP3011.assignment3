@@ -20,6 +20,7 @@ import org.springframework.web.client.RestClient;
 import comp3011.assignment.api.SubtitleSegment;
 import comp3011.assignment.api.SubtitleWord;
 
+/** A3 NOTE: Mocks upstream HTTP to verify multipart metadata, word grouping, silence filtering and duration accounting. */
 class SubtitleServiceTest {
     @Test
     void sendsLosslessAudioAndReturnsWordTimesOnlyForRetainedSegments() {
@@ -29,6 +30,7 @@ class SubtitleServiceTest {
         GlobalStatistics usage = new GlobalStatistics();
         SubtitleService service = new SubtitleService(builder.build(), "test-key", url, usage);
 
+        // A3 NOTE: Inspect the outgoing timestamp/language fields without sending audio to an external service.
         upstream.expect(requestTo(url)).andExpect(method(HttpMethod.POST))
                 .andExpect(content().string(allOf(containsString("filename=\"clip.flac\""),
                         containsString("whisper-1"), containsString("verbose_json"),

@@ -24,10 +24,10 @@ import java.util.List;
  * </p>
  */
 public class CommandLineController {
-    private final String[] args;
-
     private boolean helpRequested;
     private boolean audioRequested;
+    // A3 NOTE: Captions are a launch flag rather than a pixel-processing stage, so effect order stays independent.
+    private boolean subtitlesRequested;
     private boolean maximiseRequested;
     private Integer displayId;
     private File videoFile;
@@ -35,8 +35,7 @@ public class CommandLineController {
     private final List<FrameProcessorOption> frameProcessorOptions = new ArrayList<>();
 
     public CommandLineController(String[] args) {
-        this.args = args.clone();
-        parse();
+        parse(args.clone());
         if (errorMessage != null) {
             System.out.println(errorMessage);
         }
@@ -65,6 +64,11 @@ public class CommandLineController {
         return audioRequested;
     }
 
+    /** A3 NOTE: Reports whether -S or --subtitle-frames enables captions at startup. */
+    public boolean isSubtitlesRequested() {
+        return subtitlesRequested;
+    }
+
     public boolean isMaximiseRequested() {
         return maximiseRequested;
     }
@@ -74,18 +78,21 @@ public class CommandLineController {
         return List.copyOf(frameProcessorOptions);
     }
 
+    /** A3 NOTE: No video argument is valid because the player can open a video using its file picker. */
     public boolean shouldLaunchApplication() {
         return errorMessage == null && (videoFile != null || !helpRequested);
     }
 
     /** Parses arguments left to right so appending effect options preserves their requested order. */
-    private void parse() {
+    private void parse(String[] args) {
         List<String> videoFiles = new ArrayList<>();
         for (String arg : args) {
             if ("--help".equals(arg)) {
                 helpRequested = true;
             } else if ("--audio".equals(arg)) {
                 audioRequested = true;
+            } else if ("--subtitle-frames".equals(arg)) {
+                subtitlesRequested = true;
             } else if ("--maximise".equals(arg)) {
                 maximiseRequested = true;
             } else if ("--monitor-1".equals(arg)) {
@@ -134,6 +141,8 @@ public class CommandLineController {
             switch (shortName) {
                 case 'h' -> helpRequested = true;
                 case 'a' -> audioRequested = true;
+                // A3 NOTE: Uppercase S means subtitles; lowercase s remains the existing film-scratch effect.
+                case 'S' -> subtitlesRequested = true;
                 case 'x' -> maximiseRequested = true;
                 case '1' -> setDisplayId(1);
                 case '2' -> setDisplayId(2);

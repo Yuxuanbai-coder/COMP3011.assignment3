@@ -13,7 +13,6 @@ package comp3011;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -62,6 +61,7 @@ public class VideoPlayerModel {
     private final BlockingQueue<PlaybackCommand> playbackCommands = new LinkedBlockingQueue<>();
     // A small bounded queue limits image memory and pauses decoding when the display falls behind.
     private final BlockingQueue<PreparedFrame> preparedFrames = new ArrayBlockingQueue<>(FRAME_QUEUE_CAPACITY);
+    // A3 NOTE: Recycle BGRA pixel arrays after JavaFX copies them to limit per-frame allocations.
     private final BlockingQueue<byte[]> reusablePixels = new ArrayBlockingQueue<>(FRAME_QUEUE_CAPACITY + 2);
     // Decoded PCM packets cross from the playback worker to the audio-output worker.
     private final BlockingQueue<AudioPacket> audioPackets = new ArrayBlockingQueue<>(AUDIO_QUEUE_CAPACITY);
@@ -83,15 +83,16 @@ public class VideoPlayerModel {
     private final Consumer<String> statusChangedHandler;
     private final BiConsumer<Boolean, Boolean> playbackStateChangedHandler;
     private final Consumer<Boolean> audioOutputStateChangedHandler;
+    // A3 NOTE: The loader prepares captions off-thread; JavaFX chooses text using the displayed media timestamp.
     private final Consumer<String> subtitleTextChangedHandler;
     private final AtomicBoolean subtitlesEnabled;
     private final SubtitleLoader subtitleLoader;
-    private final FrameSubtitler subtitler;
-    // Only the JavaFX thread reads or updates the visible frame's position and subtitle.
+    // A3 NOTE: These observable display properties are owned by JavaFX, keeping UI listeners on its application thread.
     private final ReadOnlyLongWrapper displayedMediaTimestampUs = new ReadOnlyLongWrapper(NO_SEEK_REQUEST);
     private final ReadOnlyLongWrapper displayedDurationUs = new ReadOnlyLongWrapper(NO_SEEK_REQUEST);
     private final ReadOnlyObjectWrapper<SubtitleLoader.Progress> subtitleProgress =
             new ReadOnlyObjectWrapper<>(new SubtitleLoader.Progress(SubtitleLoader.State.OFF, 0, 0));
+    // A3 NOTE: Allow initial caption preparation for at most 10 s after media opens, then continue in the background.
     private static final long INITIAL_SUBTITLE_WAIT_NS = TimeUnit.SECONDS.toNanos(10);
     private boolean waitingForSubtitles;
     private long subtitleWaitDeadlineNs;
@@ -129,6 +130,7 @@ public class VideoPlayerModel {
     private boolean audioAvailable;
     private boolean frameProcessorsInitialised;
     private long currentTimestampUs;
+    // A3 NOTE: Container timestamps may have a nonzero origin; captions use normalized, video-relative microseconds.
     private long mediaStartUs;
     private long videoDurationUs = NO_SEEK_REQUEST;
     private int videoFrameDurationUs;
@@ -136,6 +138,7 @@ public class VideoPlayerModel {
     private int intFrameRate;
     private int totalVideoFrames;
     private long firstTimestampUs = NO_SEEK_REQUEST;
+    // A3 NOTE: Discard pictures decoded before the requested seek area so seeking does not show an old frame.
     private long earliestSeekFrameUs = NO_SEEK_REQUEST;
     private long logicalPlaybackBaseUs;
     private long playbackStartNs;
@@ -143,8 +146,10 @@ public class VideoPlayerModel {
     private long playbackGeneration;
     private boolean audioOutputOpenRequested;
 
+    /** A3 NOTE: Extends the existing playback workers with an independent subtitle loader and UI text callback. */
     public VideoPlayerModel(
             boolean audioEnabled,
+            boolean subtitlesEnabled,
             List<FrameProcessorOption> frameProcessorOptions,
             BiConsumer<Integer, Integer> videoSizeChangedHandler,
             Consumer<Image> frameReadyHandler,
@@ -162,18 +167,9 @@ public class VideoPlayerModel {
         this.audioOutputStateChangedHandler = audioOutputStateChangedHandler;
         this.subtitleTextChangedHandler = subtitleTextChangedHandler;
         this.subtitleLoader = subtitleLoader;
-        subtitlesEnabled = new AtomicBoolean(frameProcessorOptions.contains(FrameProcessorOption.SUBTITLE_FRAMES));
-        subtitler = new FrameSubtitler(subtitlesEnabled, subtitleLoader::textAt);
-
-        // Subtitles are composited at display time, so they can change while a frame is paused.
-        List<FrameProcessor> processors = new ArrayList<>();
-        for (FrameProcessorOption option : frameProcessorOptions) {
-            if (option != FrameProcessorOption.SUBTITLE_FRAMES) {
-                processors.add(option.createProcessor());
-            }
-        }
-
-        this.frameProcessors = List.copyOf(processors);
+        this.subtitlesEnabled = new AtomicBoolean(subtitlesEnabled);
+        this.frameProcessors = frameProcessorOptions.stream()
+                .map(FrameProcessorOption::createProcessor).toList();
         playbackProfiler = new PlaybackProfiler(this.frameProcessors);
 
         audioOutputWorker = new Thread(this::runAudioOutputWorker, "video-audio-output-worker");
@@ -186,6 +182,7 @@ public class VideoPlayerModel {
         playbackTimer.start();
     }
 
+    /** A3 NOTE: Starts a new caption version and passes its identity/preparation pause to the playback worker. */
     public void play(File file) {
         displayedDurationUs.set(NO_SEEK_REQUEST);
         requestedSubtitleVersion = subtitleLoader.setVideo(file);
@@ -195,6 +192,7 @@ public class VideoPlayerModel {
         enqueueCommand(new PlaybackCommand.Play(file, requestedSubtitleVersion, waitingForSubtitles));
     }
 
+    /** A3 NOTE: Videos opened through the file picker always begin with English captions enabled. */
     void playWithSubtitles(File file) {
         subtitlesEnabled.set(true);
         play(file);
@@ -204,18 +202,22 @@ public class VideoPlayerModel {
         seekToPosition(0);
     }
 
+    /** A3 NOTE: Routes timeline seeks through the worker command queue; the UI never operates the decoder directly. */
     public void seekToPosition(long timestampUs) {
         enqueueCommand(new PlaybackCommand.SeekTo(timestampUs));
     }
 
+    /** A3 NOTE: Exposes the displayed video's microsecond position for the timeline, independently of scheduling time. */
     ReadOnlyLongProperty displayedMediaTimestampUsProperty() {
         return displayedMediaTimestampUs.getReadOnlyProperty();
     }
 
+    /** A3 NOTE: Publishes the opened media duration so the view can enable and scale its seek slider. */
     ReadOnlyLongProperty displayedDurationUsProperty() {
         return displayedDurationUs.getReadOnlyProperty();
     }
 
+    /** A3 NOTE: Publishes caption status snapshots without exposing the loader's mutable scheduling state. */
     ReadOnlyObjectProperty<SubtitleLoader.Progress> subtitleProgressProperty() {
         return subtitleProgress.getReadOnlyProperty();
     }
@@ -228,6 +230,7 @@ public class VideoPlayerModel {
         enqueueCommand(new PlaybackCommand.SeekBy(FIVE_SECONDS_US));
     }
 
+    /** A3 NOTE: A user's pause/play choice overrides automatic waiting for initial subtitle preparation. */
     public void togglePause() {
         waitingForSubtitles = false;
         enqueueCommand(PlaybackCommand.TogglePause.INSTANCE);
@@ -246,6 +249,7 @@ public class VideoPlayerModel {
         enqueueCommand(PlaybackCommand.Stop.INSTANCE);
     }
 
+    /** A3 NOTE: Toggles preparation/display independently of visual effects and releases any caption startup wait. */
     public void toggleSubtitles() {
         boolean enabled = !subtitlesEnabled.get();
         subtitlesEnabled.set(enabled);
@@ -256,11 +260,12 @@ public class VideoPlayerModel {
         refreshSubtitle();
     }
 
+    /** A3 NOTE: Supplies the current caption state to the controller's CC button and keyboard shortcut. */
     public boolean areSubtitlesEnabled() {
         return subtitlesEnabled.get();
     }
 
-    /** Requests both workers to stop; each worker closes the native resources it exclusively owns. */
+    /** A3 NOTE: Stops playback/audio workers and the subtitle loader; each resource owner performs its own cleanup. */
     public void shutdown() {
         if (shutdownCommandQueued.compareAndSet(false, true)) {
             shutdownRequested = true;
@@ -457,7 +462,7 @@ public class VideoPlayerModel {
         }
     }
 
-    /** Downmixes playback audio to stereo, including dialogue carried by a surround center channel. */
+    /** A3 NOTE: Downmixes playback to stereo so surround center-channel dialogue reaches ordinary speakers. */
     static FFmpegFrameGrabber createPlaybackGrabber(File file) {
         FFmpegFrameGrabber playbackGrabber = new FFmpegFrameGrabber(file);
         playbackGrabber.setImageMode(FrameGrabber.ImageMode.COLOR);
@@ -504,7 +509,7 @@ public class VideoPlayerModel {
         }
     }
 
-    /** Clears queued work and establishes a new logical timestamp anchor for both video and audio. */
+    /** A3 NOTE: Resets playback timing and records the earliest acceptable picture after a seek. */
     private void resetPlaybackClock(long logicalTimestampUs, long seekTimestampUs) {
         discardPreparedFrames();
         audioPackets.clear();
@@ -548,7 +553,7 @@ public class VideoPlayerModel {
         }
     }
 
-    /** Prepares one frame for scheduled playback or for display after a paused seek. */
+    /** A3 NOTE: Publishes a paused seek preview immediately; running playback uses the scheduled frame queue. */
     private void prepareNextFrame() {
         if (!playbackOpen || preparedFrames.remainingCapacity() == 0) {
             return;
@@ -657,6 +662,7 @@ public class VideoPlayerModel {
         return null;
     }
 
+    /** A3 NOTE: Copies padded native BGR pixels into owned BGRA bytes before the decoder reuses its frame buffer. */
     private byte[] copyPixels(Frame frame) {
         int rowBytes = Math.multiplyExact(frame.imageWidth, DISPLAY_BYTES_PER_PIXEL);
         int pixelBytes = Math.multiplyExact(rowBytes, frame.imageHeight);
@@ -680,6 +686,7 @@ public class VideoPlayerModel {
         return pixels;
     }
 
+    /** A3 NOTE: Returns discarded queued pixel arrays to the pool when a seek or stop invalidates them. */
     private void discardPreparedFrames() {
         PreparedFrame frame;
         while ((frame = preparedFrames.poll()) != null) {
@@ -757,7 +764,7 @@ public class VideoPlayerModel {
         }
     }
 
-    /** Displays a frame and records its position for subsequent seek commands. */
+    /** A3 NOTE: Copies pixels into a reusable JavaFX image, releases the array and advances the caption/timeline clock. */
     private void displayPreparedFrame(PreparedFrame frame) {
         try {
             if (frame.playbackGeneration() != activePlaybackGeneration.get()) {
@@ -781,9 +788,10 @@ public class VideoPlayerModel {
         frameReadyHandler.accept(displayImage);
     }
 
+    /** A3 NOTE: Refreshes captions even while paused and ends initial waiting on completion, failure or timeout. */
     private void refreshSubtitle() {
         long timestampUs = displayedMediaTimestampUs.get();
-        String text = subtitler.textAt(timestampUs);
+        String text = timestampUs >= 0 && subtitlesEnabled.get() ? subtitleLoader.textAt(timestampUs) : "";
         if (!displayedSubtitleText.equals(text)) {
             displayedSubtitleText = text;
             subtitleTextChangedHandler.accept(text);
@@ -799,6 +807,7 @@ public class VideoPlayerModel {
         }
     }
 
+    /** A3 NOTE: Sends a version-tagged resume so a late completion cannot resume another video. */
     private void resumeAfterSubtitlePreparation() {
         if (waitingForSubtitles) {
             waitingForSubtitles = false;
@@ -842,6 +851,7 @@ public class VideoPlayerModel {
                 boolean matchingOutput = state.player != null
                         && state.playbackGeneration == clock.playbackGeneration();
                 if (matchingOutput) {
+                    // A3 NOTE: Stop/start the matching audio device without discarding buffered samples during pause.
                     state.player.setPaused(clock.paused());
                 }
                 boolean outputReady = matchingOutput
@@ -1049,6 +1059,7 @@ public class VideoPlayerModel {
 
         // Decoding has ended, but already prepared frames still need to reach JavaFX.
         // Audio can drain only if a running playback clock has already been established.
+        // A3 NOTE: Only drain queued audio after a running clock exists; a paused startup must not wait for playback.
         boolean drainAudio = !pauseRequested && firstTimestampUs != NO_SEEK_REQUEST;
         pauseRequested = false;
         closePlaybackResources(drainAudio);
