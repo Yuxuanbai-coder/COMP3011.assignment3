@@ -26,7 +26,7 @@ import java.util.List;
 public class CommandLineController {
     private boolean helpRequested;
     private boolean audioRequested;
-    // A3 NOTE: Captions are a launch flag rather than a pixel-processing stage, so effect order stays independent.
+    // Captions are composed after the requested visual effects, including when enabled during playback.
     private boolean subtitlesRequested;
     private boolean maximiseRequested;
     private Integer displayId;

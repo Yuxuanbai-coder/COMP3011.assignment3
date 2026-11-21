@@ -13,7 +13,7 @@ import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.OptionalLong;
 
-/** A3 NOTE: Uses a PCM digest for exact cache hits and coarse audio features to align matching excerpts. */
+/** Matches exact audio and excerpts by PCM content. Developed with OpenAI Codex assistance. */
 record AudioFingerprint(String digest, byte[] features) {
     private static final long STEP_US = 20_000;
     private static final int STEP_SAMPLES = (int) (AudioExtractor.SUBTITLE_SAMPLE_RATE * STEP_US / 1_000_000L);

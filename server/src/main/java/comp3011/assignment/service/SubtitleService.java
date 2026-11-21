@@ -9,6 +9,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
@@ -19,7 +20,7 @@ import comp3011.assignment.api.SubtitleSegment;
 import comp3011.assignment.api.SubtitleWord;
 
 
-/** A3 NOTE: Converts uploaded English audio into timed subtitles and records upstream audio-second usage. */
+/** Converts uploaded English audio into timed subtitles and records usage. Developed with OpenAI Codex assistance. */
 @Service
 public class SubtitleService {
 
@@ -63,7 +64,7 @@ public class SubtitleService {
                     .body(requestBody)
                     .retrieve()
                     .body(WhisperResponse.class);
-        } catch (ResourceAccessException | HttpServerErrorException e) {
+        } catch (ResourceAccessException | HttpServerErrorException | HttpClientErrorException.TooManyRequests e) {
             throw new TranscriptionServiceException("Subtitle transcription service is unavailable", e);
         }
 

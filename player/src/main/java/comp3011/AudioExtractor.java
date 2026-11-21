@@ -22,7 +22,7 @@ import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
 import org.bytedeco.javacv.FrameGrabber;
 
-/** A3 NOTE: Decodes one 16 kHz mono PCM track, then copies lossless WAV windows for subtitle requests. */
+/** Decodes a mono PCM track for subtitle requests. Developed with OpenAI Codex assistance. */
 public class AudioExtractor {
     static final int SUBTITLE_SAMPLE_RATE = 16_000;
     private static final int TIMESTAMP_ROUNDING_SAMPLES = SUBTITLE_SAMPLE_RATE / 500;

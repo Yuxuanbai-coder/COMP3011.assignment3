@@ -10,6 +10,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 import comp3011.assignment.service.TranscriptionServiceException;
 
@@ -29,14 +30,15 @@ public class ApiExceptionHandler {
     /**
      * Handles invalid client input, such as an empty or unsupported audio
      * upload.
+     * The subtitle upload handling was updated with OpenAI Codex assistance.
      *
      * @param exception the validation failure
      * @param request the HTTP request that contained the invalid input
      * @return a HTTP 400 response in the standard error format
      */
-    @ExceptionHandler(IllegalArgumentException.class)
+    @ExceptionHandler({IllegalArgumentException.class, MissingServletRequestPartException.class})
     public ResponseEntity<ErrorResponse> handleBadRequest(
-            IllegalArgumentException exception,
+            Exception exception,
             HttpServletRequest request) {
         ErrorResponse response = new ErrorResponse(
                 Instant.now(),

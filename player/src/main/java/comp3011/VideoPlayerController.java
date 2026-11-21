@@ -181,9 +181,8 @@ public class VideoPlayerController {
     }
 
     /** A3 NOTE: Updates model preparation and the CC indicator for both button clicks and the S shortcut. */
-    private void toggleSubtitles(){
+    private void toggleSubtitles() {
         model.toggleSubtitles();
-        System.out.println("Subtitles enabled: " + model.areSubtitlesEnabled());
         view.showSubtitlesEnabled(model.areSubtitlesEnabled());
     }
 

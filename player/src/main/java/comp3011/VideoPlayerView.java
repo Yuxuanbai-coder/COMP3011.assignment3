@@ -13,12 +13,9 @@ package comp3011;
 import java.util.Locale;
 import java.util.function.LongConsumer;
 
-import javafx.geometry.Bounds;
 import javafx.geometry.Insets;
 import javafx.geometry.Point2D;
 import javafx.geometry.Pos;
-import javafx.scene.AccessibleRole;
-import javafx.scene.Group;
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.canvas.Canvas;
@@ -39,10 +36,6 @@ import javafx.scene.shape.Line;
 import javafx.scene.shape.Polygon;
 import javafx.scene.shape.SVGPath;
 import javafx.scene.shape.StrokeLineCap;
-import javafx.scene.text.Font;
-import javafx.scene.text.FontWeight;
-import javafx.scene.text.Text;
-import javafx.scene.text.TextAlignment;
 
 /**
  * The view part of the video player model-view-controller architecture.
@@ -60,10 +53,6 @@ public class VideoPlayerView {
     private static final long MICROS_PER_SECOND = 1_000_000L;
 
     private final ImageView imageView = new ImageView();
-    // A3 NOTE: Captions are a separate JavaFX overlay, allowing text to change without reprocessing a paused frame.
-    private final Group subtitleOverlay = new Group();
-    private final Text subtitleText = new Text();
-    private final Text[] subtitleOutline = new Text[8];
     private final Label statusLabel = new Label("No video loaded");
     private final Label subtitleStatusLabel = new Label();
     // A3 NOTE: The slider uses seconds for display; seek callbacks convert its values to media microseconds.
@@ -88,14 +77,14 @@ public class VideoPlayerView {
     public VideoPlayerView() {
         imageView.setPreserveRatio(true);
         imageView.setSmooth(false);
+        imageView.setAccessibleText("Video");
 
-        videoPane = new StackPane(imageView, subtitleOverlay);
+        videoPane = new StackPane(imageView);
         videoPane.setStyle("-fx-background-color: black;");
         videoPane.setMinSize(0, 0);
         videoPane.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
         imageView.fitWidthProperty().bind(videoPane.widthProperty());
         imageView.fitHeightProperty().bind(videoPane.heightProperty());
-        configureSubtitles();
 
         startOverButton = iconButton(createLoopIcon(false, null));
         backFiveButton = iconButton(createLoopIcon(false, "5"));
@@ -261,68 +250,9 @@ public class VideoPlayerView {
         subtitleStatusLabel.setVisible(!status.isEmpty());
     }
 
-    /** A3 NOTE: Updates only the caption text and layout; the underlying video pixels stay untouched. */
+    /** Exposes the current caption to assistive technology after the frame processor draws it. */
     public void setSubtitleText(String text) {
-        subtitleText.setText(text);
-        layoutSubtitle();
-    }
-
-    /** A3 NOTE: Uses white glyphs with eight black offset copies for readable outlines and cached text rendering. */
-    private void configureSubtitles() {
-        subtitleOverlay.setManaged(false);
-        subtitleOverlay.setMouseTransparent(true);
-        subtitleOverlay.setVisible(false);
-        subtitleText.setId("subtitle-text");
-        subtitleText.setFill(Color.WHITE);
-        subtitleText.setTextAlignment(TextAlignment.CENTER);
-
-        // Filled glyphs can use JavaFX's glyph cache, including when a cue changes.
-        for (int index = 0; index < subtitleOutline.length; index++) {
-            Text outline = new Text();
-            outline.setAccessibleRole(AccessibleRole.NODE);
-            outline.setFill(Color.BLACK);
-            outline.setTextAlignment(TextAlignment.CENTER);
-            outline.fontProperty().bind(subtitleText.fontProperty());
-            outline.textProperty().bind(subtitleText.textProperty());
-            subtitleOutline[index] = outline;
-            subtitleOverlay.getChildren().add(outline);
-        }
-        subtitleOverlay.getChildren().add(subtitleText);
-        resizeSubtitle(12);
-        imageView.boundsInParentProperty().addListener((_, _, _) -> layoutSubtitle());
-    }
-
-    /** A3 NOTE: Positions captions inside the actual displayed image, accounting for letterboxing and long lines. */
-    private void layoutSubtitle() {
-        Bounds video = imageView.getBoundsInParent();
-        if (subtitleText.getText().isEmpty() || imageView.getImage() == null
-                || video.getWidth() <= 0 || video.getHeight() <= 0) {
-            subtitleOverlay.setVisible(false);
-            return;
-        }
-
-        double size = Math.clamp(video.getHeight() * 0.052, 12, 60);
-        if (size != subtitleText.getFont().getSize()) {
-            resizeSubtitle(size);
-        }
-        Bounds text = subtitleOverlay.getLayoutBounds();
-        double scale = Math.min(1, video.getWidth() * 0.9 / text.getWidth());
-        subtitleOverlay.setScaleX(scale);
-        subtitleOverlay.setScaleY(scale);
-        subtitleOverlay.relocate(video.getMinX() + (video.getWidth() - text.getWidth()) / 2,
-                video.getMaxY() - video.getHeight() * 0.07 - text.getHeight() * (1 + scale) / 2);
-        subtitleOverlay.setVisible(true);
-    }
-
-    /** A3 NOTE: Scales the bold font and outline offsets together as the displayed video size changes. */
-    private void resizeSubtitle(double size) {
-        subtitleText.setFont(Font.font("SansSerif", FontWeight.BOLD, size));
-        double radius = size / 12;
-        for (int index = 0; index < subtitleOutline.length; index++) {
-            double angle = index * Math.PI / 4;
-            subtitleOutline[index].setTranslateX(radius * Math.cos(angle));
-            subtitleOutline[index].setTranslateY(radius * Math.sin(angle));
-        }
+        imageView.setAccessibleText(text.isEmpty() ? "Video" : text);
     }
 
     public void setVideoDisplaySize(double width, double height) {

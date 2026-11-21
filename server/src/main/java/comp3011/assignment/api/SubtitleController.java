@@ -8,7 +8,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import comp3011.assignment.service.SubtitleService;
 
-/** A3 NOTE: Adds the multipart subtitle endpoint used by the JavaFX player's asynchronous client. */
+/** Accepts subtitle audio uploads from the player. Developed with OpenAI Codex assistance. */
 @RestController
 public class SubtitleController {
     private final SubtitleService subtitleService;
@@ -24,6 +24,9 @@ public class SubtitleController {
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
     public SubtitleResponse subtitles(@RequestPart("file") MultipartFile file) {
+        if (file.isEmpty()) {
+            throw new IllegalArgumentException("The audio file is empty.");
+        }
         return subtitleService.transcribe(file);
     }
 }

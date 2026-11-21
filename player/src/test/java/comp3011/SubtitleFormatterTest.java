@@ -93,4 +93,20 @@ class SubtitleFormatterTest {
         assertEquals(List.of(new SubtitleSegment(19.1, 20, "Before,")), before);
         assertEquals(List.of(new SubtitleSegment(20, 21, "boundary.")), after);
     }
+
+    @Test
+    void estimatesEachWordOnceAcrossTheBoundaryWhenAMiddleTimestampIsMissing() {
+        var speech = new SubtitleSegment(1.8, 4.2, "We need to wait here.", List.of(
+                new SubtitleWord("We", 1.8, 2.1),
+                new SubtitleWord("need", 2.2, 2.6),
+                new SubtitleWord("wait", 3.1, 3.5),
+                new SubtitleWord("here", 3.7, 4.2)));
+        var before = SubtitleFormatter.format(List.of(speech), 17_000_000L, 0, 20_000_000L);
+        var after = SubtitleFormatter.format(List.of(speech), 17_000_000L, 20_000_000L, 40_000_000L);
+
+        assertEquals(List.of("We need"), before.stream().map(SubtitleSegment::text).toList());
+        assertEquals(List.of("to wait here."), after.stream().map(SubtitleSegment::text).toList());
+        assertTrue(before.getFirst().end() <= 20);
+        assertTrue(after.getFirst().start() >= 20);
+    }
 }

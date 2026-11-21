@@ -16,11 +16,12 @@ record PreparedFrame(
         int height,
         long mediaTimestampUs,
         long logicalTimestampUs,
-        long targetTimeNs) {
+        long targetTimeNs,
+        FrameSubtitler.Caption caption) {
 
     /** A3 NOTE: Shifts the display deadline after a pause while keeping media time and pixel ownership unchanged. */
     PreparedFrame delayedBy(long pauseDurationNs) {
         return new PreparedFrame(playbackGeneration, pixels, width, height, mediaTimestampUs,
-                logicalTimestampUs, targetTimeNs + pauseDurationNs);
+                logicalTimestampUs, targetTimeNs + pauseDurationNs, caption);
     }
 }

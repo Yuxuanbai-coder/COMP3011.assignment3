@@ -12,7 +12,7 @@ import java.util.Optional;
 
 import tools.jackson.databind.json.JsonMapper;
 
-/** A3 NOTE: Persists complete subtitle tracks by audio content so renaming or excerpt playback can reuse captions. */
+/** Persists complete subtitle tracks by audio content. Developed with OpenAI Codex assistance. */
 final class SubtitleCache {
     private static final JsonMapper MAPPER = JsonMapper.builder().build();
     private static final int MAX_EXCERPT_CANDIDATES = 16;

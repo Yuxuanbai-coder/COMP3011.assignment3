@@ -17,7 +17,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/** A3 NOTE: Prepares all subtitle windows with three workers and bounded retries. Developed with OpenAI Codex assistance. */
+/** Prepares subtitle windows with three workers and capped retry delays. Developed with OpenAI Codex assistance. */
 public class SubtitleLoader {
     // A3 NOTE: Each 20 s ownership window has 3 s of surrounding audio context; only its own cues are retained.
     private static final long WINDOW_US = 20_000_000L;
@@ -25,7 +25,7 @@ public class SubtitleLoader {
     private static final int WORKER_COUNT = 3;
     private static final long UNKNOWN_DURATION = -1;
     private static final long PREPARE_AUDIO = -1;
-    private static final int MAX_ATTEMPTS = 3;
+    private static final int MAX_BACKOFF_EXPONENT = 3;
     private static final int REQUEST_TIMEOUT_SECONDS = 32;
 
     private final SubtitleClient client;
@@ -52,7 +52,7 @@ public class SubtitleLoader {
 
     /** A3 NOTE: Creates the local HTTP client and a versioned, persistent cache under the working directory. */
     public SubtitleLoader() {
-        this(new SubtitleClient(), new SubtitleCache(Path.of(".a3-subtitle-cache", "v1")));
+        this(new SubtitleClient(), new SubtitleCache(Path.of(".a3-subtitle-cache", "v2")));
     }
 
     /** A3 NOTE: Tests inject a fake client with caching disabled so no network or persistent files are needed. */
@@ -92,6 +92,7 @@ public class SubtitleLoader {
     synchronized void mediaOpened(long version, boolean hasAudio, long durationUs) {
         if (!closed && version == videoVersion && !mediaOpened) {
             mediaOpened = true;
+            failed = false;
             this.hasAudio = hasAudio;
             this.durationUs = durationUs > 0 ? durationUs : UNKNOWN_DURATION;
             notifyAll();
@@ -101,6 +102,7 @@ public class SubtitleLoader {
     /** A3 NOTE: Stops subtitle jobs when playback cannot open the current media. */
     synchronized void mediaFailed(long version) {
         if (version == videoVersion) {
+            mediaOpened = false;
             failed = true;
             activeRequests.values().forEach(request -> request.worker().interrupt());
             notifyAll();
@@ -125,7 +127,9 @@ public class SubtitleLoader {
         if (enabled) {
             failures.clear();
             failedWindows = 0;
-            failed = false;
+            if (mediaOpened) {
+                failed = false;
+            }
             if (!workersStarted) {
                 for (int i = 1; i <= WORKER_COUNT; i++) {
                     Thread.ofPlatform().name("subtitle-loader-" + i).daemon().start(this::run);
@@ -206,7 +210,7 @@ public class SubtitleLoader {
     private synchronized Request awaitRequest() throws InterruptedException {
         while (!closed) {
             long retryDelayNs = Long.MAX_VALUE;
-            if (enabled && hasAudio && !failed) {
+            if (enabled && mediaOpened && hasAudio && !failed) {
                 if (decodedAudio == null) {
                     if (!activeRequests.containsKey(PREPARE_AUDIO)) {
                         return reserve(PREPARE_AUDIO);
@@ -398,7 +402,7 @@ public class SubtitleLoader {
 
     /** A3 NOTE: Rechecks selection and caption state after extraction, before an upload can be started. */
     private synchronized boolean canSubmit(Request request) {
-        return isCurrent(request) && enabled && !failed;
+        return isCurrent(request) && enabled && mediaOpened && !failed;
     }
 
     /** A3 NOTE: Converts clip-relative results into window-owned, video-relative readable captions. */
@@ -420,8 +424,9 @@ public class SubtitleLoader {
         }
     }
 
-    /** A3 NOTE: Retries temporary job failures with exponential delay, up to three job attempts per window. */
+    /** Retries temporary failures while this video is enabled, with delays capped at eight seconds. */
     private void recordFailure(Request request, Throwable cause, boolean retryable) {
+        boolean report;
         synchronized (this) {
             if (!isCurrent(request)) {
                 return;
@@ -429,16 +434,20 @@ public class SubtitleLoader {
             if (request.startUs() == PREPARE_AUDIO) {
                 failed = true;
                 retryable = false;
+                report = true;
             } else {
                 Failure previous = failures.get(request.startUs());
-                int attempts = previous == null ? 1 : previous.attempts() + 1;
-                retryable = retryable && attempts < MAX_ATTEMPTS;
-                long delayNs = TimeUnit.SECONDS.toNanos(1L << attempts);
-                failures.put(request.startUs(), new Failure(attempts, System.nanoTime() + delayNs, !retryable));
+                int backoff = previous == null ? 1 : Math.min(previous.backoff() + 1, MAX_BACKOFF_EXPONENT);
+                long delayNs = TimeUnit.SECONDS.toNanos(1L << backoff);
+                failures.put(request.startUs(), new Failure(backoff, System.nanoTime() + delayNs, !retryable));
+                report = previous == null || !retryable;
                 if (!retryable) {
                     failedWindows++;
                 }
             }
+        }
+        if (!report) {
+            return;
         }
         String stage = request.startUs() == PREPARE_AUDIO ? "while decoding audio"
                 : "at " + request.startUs() / 1_000_000L + " seconds";
@@ -509,7 +518,7 @@ public class SubtitleLoader {
     }
 
     /** A3 NOTE: Stores the attempt count, monotonic retry deadline and whether this window is exhausted. */
-    private record Failure(int attempts, long retryAtNs, boolean terminal) {
+    private record Failure(int backoff, long retryAtNs, boolean terminal) {
     }
 
     /** A3 NOTE: Snapshots complete cues under the monitor so saving can happen after releasing the lock. */

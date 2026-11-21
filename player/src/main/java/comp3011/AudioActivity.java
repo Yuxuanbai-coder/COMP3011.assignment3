@@ -3,7 +3,7 @@ package comp3011;
 import java.nio.ShortBuffer;
 import java.util.BitSet;
 
-/** A3 NOTE: Measures audible PCM slices to skip silent uploads and reject cues over silence; this is not speech recognition. */
+/** Measures audible PCM slices for subtitle filtering. Developed with OpenAI Codex assistance. */
 final class AudioActivity {
     private static final long SLICE_US = 25_000;
     private static final long TIMING_MARGIN_US = 50_000;

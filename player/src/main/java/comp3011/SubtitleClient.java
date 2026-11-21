@@ -16,7 +16,7 @@ import java.util.concurrent.CompletableFuture;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
-/** A3 NOTE: Uploads audio asynchronously to the local subtitle server; the API key stays on the server. */
+/** Uploads audio asynchronously to the local subtitle server. Developed with OpenAI Codex assistance. */
 public class SubtitleClient {
 
     private final HttpClient httpClient = HttpClient.newBuilder()
@@ -102,9 +102,9 @@ public class SubtitleClient {
             this.status = status;
         }
 
-        /** A3 NOTE: Rate limiting and server failures may recover within the loader's bounded retry budget. */
+        /** Rate limiting, gateway failures and temporary outages can recover without user intervention. */
         boolean retryable() {
-            return status == 429 || status >= 500;
+            return status == 429 || status == 502 || status == 503 || status == 504;
         }
     }
 }

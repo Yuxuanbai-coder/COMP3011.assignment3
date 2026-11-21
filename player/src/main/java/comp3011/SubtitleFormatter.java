@@ -41,10 +41,9 @@ final class SubtitleFormatter {
             }
             List<TimedWord> words = alignWords(segment);
             if (words.isEmpty()) {
-                addPages(cues, segment.text(), start, end);
-            } else {
-                addTimedCues(cues, words, offset, windowStart, windowEnd);
+                words = estimateWords(segment);
             }
+            addTimedCues(cues, words, offset, windowStart, windowEnd);
         }
 
         if (activity != null) {
@@ -65,6 +64,19 @@ final class SubtitleFormatter {
         return List.copyOf(result);
     }
 
+    /** Uses the complete segment interval so overlapping requests still assign each word to one window. */
+    private static List<TimedWord> estimateWords(SubtitleSegment segment) {
+        String[] tokens = segment.text().replaceAll("(?U)\\s+", " ").strip().split(" ");
+        double start = Math.max(0, segment.start());
+        double secondsPerWord = (segment.end() - start) / tokens.length;
+        List<TimedWord> words = new ArrayList<>(tokens.length);
+        for (int i = 0; i < tokens.length; i++) {
+            words.add(new TimedWord(start + i * secondsPerWord, start + (i + 1) * secondsPerWord,
+                    i == 0 ? tokens[i] : " " + tokens[i]));
+        }
+        return words;
+    }
+
     /** A3 NOTE: Uses word midpoints to assign overlap-boundary words once, then splits phrases at pauses/size limits. */
     private static void addTimedCues(
             List<SubtitleSegment> cues, List<TimedWord> words, double offset, double windowStart, double windowEnd) {
@@ -72,7 +84,7 @@ final class SubtitleFormatter {
         double phraseStart = 0;
         double phraseEnd = 0;
         for (TimedWord word : words) {
-            double midpoint = offset + (word.start() + word.end()) / 2;
+            double midpoint = Math.round((offset + (word.start() + word.end()) / 2) * 1_000_000) / 1_000_000.0;
             if (midpoint < windowStart || midpoint >= windowEnd) {
                 continue;
             }

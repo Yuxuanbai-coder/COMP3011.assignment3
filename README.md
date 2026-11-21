@@ -54,7 +54,7 @@ The player opens a window where you can choose a video. Audio is enabled by defa
 
 Use **Open video** again to switch videos. Opening a video through the file picker enables captions automatically.
 
-`Preparing subtitles` means preparation is still in progress. `Retrying subtitles` means a request is being retried. If you see `Subtitles incomplete`, check the troubleshooting section below.
+`Preparing subtitles` means preparation is still in progress. `Retrying subtitles` means temporary failures are being retried while captions are enabled. New captions resume automatically when the service recovers. If you see `Subtitles incomplete`, check the troubleshooting section below.
 
 ## Video effects
 
@@ -130,6 +130,8 @@ This is equivalent to `-j -f -d -d -n`.
 
 The chosen effects stay active when you open another video. To change the effect sequence, close the player and relaunch it with different options. Captions and audio can still be toggled during playback.
 
+The caption frame processor renders white, black-outlined text into the displayed video after the visual effects so the captions stay legible.
+
 ## Playback controls
 
 | Control | Action |
@@ -142,6 +144,8 @@ The chosen effects stay active when you open another video. To change the effect
 | Click the progress bar | Seek to a time in the video |
 | `A` | Toggle audio |
 | **Stop** / `Esc` | Exit the player |
+
+If the video becomes unavailable during playback, the player stops at the last visible frame and reports the interruption. Reconnect the drive and resume, or choose a different file with **Open video**.
 
 ## Online captions and cache reuse
 
@@ -224,7 +228,7 @@ sh server/mvnw -f player/pom.xml javafx:run '-Djavafx.args=--help'
 
 ## Subtitle cache location
 
-The player sends audio segments to `POST /api/v1/subtitles`. The server uses Whisper to return English captions and timestamps. Completed tracks are saved in `.a3-subtitle-cache/v1/` under the player's working directory. Complete cached tracks can be reused after restarting the player. Launch it from the same directory to reuse the same cache location.
+The player sends audio segments to `POST /api/v1/subtitles`. The server uses Whisper to return English captions and timestamps. Completed tracks are saved in `.a3-subtitle-cache/v2/` under the player's working directory. Complete cached tracks can be reused after restarting the player. Launch it from the same directory to reuse the same cache location.
 
 ## Automated tests on macOS
 
@@ -311,7 +315,9 @@ TITAN supplies the test media. Keep API keys and local videos such as `test.mp4`
 
 ## Source and attribution
 
-The project builds on the original COMP3011 materials from Simon Ratcliffe, in collaboration with GPT-5.6 Terra, and on Yuxuan Bai's Assignments 1 and 2. Source files retain their original attribution and acknowledgements of OpenAI Codex assistance.
+The project builds on the original COMP3011 materials from Simon Ratcliffe, in collaboration with GPT-5.6 Terra, and on Yuxuan Bai's Assignments 1 and 2. Source files retain their original attribution.
+
+OpenAI Codex assisted with the subtitle pipeline and its tests, including PCM extraction, audio fingerprints, cache lookup, caption rendering, and recovery after temporary service or media failures.
 
 - Assignment 1 source commit `c88e91084487b4b64c0706435427f9a77b6a1658`
 - Assignment 2 source commit `1ac5c42286597f588afee3d521b8049dadd5b462`
