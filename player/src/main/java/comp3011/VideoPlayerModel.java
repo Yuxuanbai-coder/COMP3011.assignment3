@@ -16,6 +16,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -56,6 +57,7 @@ public class VideoPlayerModel {
     private static final long FIVE_SECONDS_US = 5_000_000L;
     private static final long AUDIO_LEAD_NS = 30_000_000L;
     private static final int FRAME_QUEUE_CAPACITY = 3;
+    private static final int STARTUP_FRAME_COUNT = 2;
     private static final int AUDIO_QUEUE_CAPACITY = 64;
     private static final int DISPLAY_BYTES_PER_PIXEL = 4;
 
@@ -142,6 +144,9 @@ public class VideoPlayerModel {
     private boolean audioOutputEnabled;
     private boolean audioAvailable;
     private boolean frameProcessorsInitialised;
+    // The worker primes the same bounded frame queue before setting a new playback clock.
+    private final ArrayDeque<PreparedFrame> startupFrames = new ArrayDeque<>(STARTUP_FRAME_COUNT);
+    private byte[] packedBgrRow = new byte[0];
     private long currentTimestampUs;
     // A3 NOTE: Container timestamps may have a nonzero origin; captions use normalized, video-relative microseconds.
     private long mediaStartUs;
@@ -410,9 +415,18 @@ public class VideoPlayerModel {
 
         if (pauseRequested) {
             pauseStartedNs = System.nanoTime();
+            if (playbackStartNs == 0) {
+                if (!startupFrames.isEmpty()) {
+                    playbackEvents.offer(new PlaybackEvent.PausedFrameReady(startupFrames.removeFirst()));
+                }
+                notifyStatusChanged(videoFile.getName());
+            }
             // Keep audio the decoder has already read ahead for the resumed playback clock.
             publishAudioClock();
         } else {
+            if (playbackStartNs == 0) {
+                notifyStatusChanged("Buffering video…");
+            }
             resumePlaybackClock(System.nanoTime());
             publishAudioClock();
         }
@@ -551,6 +565,9 @@ public class VideoPlayerModel {
         playbackStartNs = 0;
         pauseStartedNs = pauseRequested ? System.nanoTime() : 0;
         publishAudioClock();
+        if (!pauseRequested) {
+            notifyStatusChanged("Buffering video…");
+        }
     }
 
     private void resumePlaybackClock(long now) {
@@ -561,6 +578,16 @@ public class VideoPlayerModel {
             retimeQueuedFrames(pauseDurationNs);
         }
         pauseStartedNs = 0;
+    }
+
+    /** Anchors audio and video only after the first pictures are ready to be presented. */
+    private void startPreparedPlayback() {
+        playbackStartNs = System.nanoTime();
+        while (!startupFrames.isEmpty()) {
+            preparedFrames.add(startupFrames.removeFirst().delayedBy(playbackStartNs));
+        }
+        publishAudioClock();
+        notifyStatusChanged(videoFile.getName());
     }
 
     private void retimeQueuedFrames(long pauseDurationNs) {
@@ -593,6 +620,11 @@ public class VideoPlayerModel {
             }
             if (pauseRequested) {
                 playbackEvents.offer(new PlaybackEvent.PausedFrameReady(frame));
+            } else if (playbackStartNs == 0) {
+                startupFrames.addLast(frame);
+                if (startupFrames.size() == STARTUP_FRAME_COUNT) {
+                    startPreparedPlayback();
+                }
             } else if (!preparedFrames.offer(frame)) {
                 releasePreparedFrame(frame);
             }
@@ -658,11 +690,6 @@ public class VideoPlayerModel {
 
             if (firstTimestampUs == NO_SEEK_REQUEST) {
                 firstTimestampUs = timestampUs;
-                playbackStartNs = System.nanoTime();
-                if (pauseRequested) {
-                    pauseStartedNs = playbackStartNs;
-                }
-                publishAudioClock();
             }
 
             int frameNumber = grabber.getFrameNumber();
@@ -754,13 +781,17 @@ public class VideoPlayerModel {
 
         // FFmpeg supplies padded BGR rows. Pack the pixels with an opaque alpha byte for JavaFX.
         ByteBuffer source = (ByteBuffer) frame.image[0];
+        int bgrRowBytes = frame.imageWidth * 3;
+        if (packedBgrRow.length < bgrRowBytes) {
+            packedBgrRow = new byte[bgrRowBytes];
+        }
         int destination = 0;
         for (int y = 0; y < frame.imageHeight; y++) {
-            int index = y * frame.imageStride;
-            for (int x = 0; x < frame.imageWidth; x++) {
-                pixels[destination++] = source.get(index++);
-                pixels[destination++] = source.get(index++);
-                pixels[destination++] = source.get(index++);
+            source.get(y * frame.imageStride, packedBgrRow, 0, bgrRowBytes);
+            for (int index = 0; index < bgrRowBytes; index += 3) {
+                pixels[destination++] = packedBgrRow[index];
+                pixels[destination++] = packedBgrRow[index + 1];
+                pixels[destination++] = packedBgrRow[index + 2];
                 pixels[destination++] = (byte) 0xff;
             }
         }
@@ -791,6 +822,9 @@ public class VideoPlayerModel {
 
     /** A3 NOTE: Returns discarded queued pixel arrays to the pool when a seek or stop invalidates them. */
     private void discardPreparedFrames() {
+        while (!startupFrames.isEmpty()) {
+            releasePreparedFrame(startupFrames.removeFirst());
+        }
         PreparedFrame frame;
         while ((frame = preparedFrames.poll()) != null) {
             releasePreparedFrame(frame);
@@ -1035,6 +1069,11 @@ public class VideoPlayerModel {
         long copyStartedNs = playbackProfiler.enabled() ? System.nanoTime() : 0;
         byte[] samples = AudioPlayer.copySamples(frame);
         if (samples.length > 0) {
+            // Space out the prefill on media with a long interval between pictures.
+            if (playbackStartNs == 0 && !pauseRequested && firstTimestampUs != NO_SEEK_REQUEST
+                    && audioPackets.size() >= AUDIO_QUEUE_CAPACITY / 2) {
+                startPreparedPlayback();
+            }
             AudioPacket packet = new AudioPacket(playbackGeneration, timestampUs, samples);
             if (!audioPackets.offer(packet)) {
                 // A saturated output queue means sound is already behind the shared clock.
@@ -1268,10 +1307,11 @@ public class VideoPlayerModel {
                 ? videoDurationUs
                 : currentTimestampUs;
 
-        // Decoding has ended, but already prepared frames still need to reach JavaFX.
-        // Audio can drain only if a running playback clock has already been established.
-        // A3 NOTE: Only drain queued audio after a running clock exists; a paused startup must not wait for playback.
-        boolean drainAudio = !pauseRequested && firstTimestampUs != NO_SEEK_REQUEST;
+        // Short clips can reach their end before filling the startup queue.
+        if (!pauseRequested && firstTimestampUs != NO_SEEK_REQUEST && playbackStartNs == 0) {
+            startPreparedPlayback();
+        }
+        boolean drainAudio = !pauseRequested && playbackStartNs > 0;
         pauseRequested = false;
         closePlaybackResources(drainAudio);
         currentTimestampUs = endTimestampUs;

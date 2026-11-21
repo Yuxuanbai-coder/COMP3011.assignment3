@@ -163,7 +163,9 @@ A freshly started server should return:
 
 `usage` is the cumulative number of **audio seconds successfully transcribed** by the current server process. It increases when new audio is transcribed online. Overlapping audio segments and retries mean it may differ from the video's duration.
 
-To check caching, wait until subtitles for the whole video are ready, then reopen the same video with **Open video**. Keep the same server process running and compare `usage` before and after replaying: a complete cache hit leaves usage unchanged. Cached tracks can also be reused for renamed videos and excerpts with matching audio.
+To check caching, wait until subtitles for the whole video are ready, then reopen the same video with **Open video**. Compare `usage` before and after replaying against the same server process. A complete cache hit leaves usage unchanged. The player can also reuse a local track for a renamed video or an excerpt with matching audio.
+
+To test the server cache separately, replay the video from a second player working directory with an empty player cache. Once the first player has finished transcribing, the server can return the same audio segments even if its connection to OpenAI is interrupted. Keep the subtitle server running for this test. The same cache remains available after a server restart when it uses the same cache directory.
 
 A response containing `usage: 0` only confirms that the server is reachable. **Captions appearing for a new video, together with increased usage, confirm successful online transcription.** A video with a complete cached track can reuse its existing captions.
 
@@ -228,7 +230,9 @@ sh server/mvnw -f player/pom.xml javafx:run '-Djavafx.args=--help'
 
 ## Subtitle cache location
 
-The player sends audio segments to `POST /api/v1/subtitles`. The server uses Whisper to return English captions and timestamps. Completed tracks are saved in `.a3-subtitle-cache/v2/` under the player's working directory. Complete cached tracks can be reused after restarting the player. Launch it from the same directory to reuse the same cache location.
+The player sends audio segments to `POST /api/v1/subtitles`. The server uses Whisper to return English captions and timestamps. Completed tracks are saved in `.a3-subtitle-cache/v2/` under the player's working directory. Launch it from the same directory to reuse those tracks across sessions.
+
+The server stores successful responses in `.a3-subtitle-server-cache/v1/` under its working directory. Requests with identical audio bytes can share the result across players. The server saves the transcript and its timestamps, and still needs an API key and upstream access for new audio. To use a different cache directory, pass `--a3.subtitle-cache-directory=/path/to/cache` when launching the server JAR.
 
 ## Automated tests on macOS
 

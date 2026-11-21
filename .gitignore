@@ -12,6 +12,7 @@
 **/.idea/
 **/.vscode/
 **/.a3-subtitle-cache/
+**/.a3-subtitle-server-cache/
 *.class
 *.log
 

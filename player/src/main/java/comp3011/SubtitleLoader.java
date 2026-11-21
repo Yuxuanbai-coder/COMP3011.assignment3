@@ -487,13 +487,15 @@ public class SubtitleLoader {
         }
     }
 
-    /** A3 NOTE: Deletes retired PCM only after its final active reader releases ownership. */
+    /** A3 NOTE: Hands retired PCM to a cleanup thread after its final reader releases ownership. */
     private void removeUnusedAudio(Path audio) {
         if (audio != null && obsoleteAudio.contains(audio)
                 && activeRequests.values().stream().noneMatch(request -> audio.equals(request.audio()))) {
             obsoleteAudio.remove(audio);
-            deleteTemporaryPath(audio);
-            deleteTemporaryPath(audio.getParent());
+            Thread.ofPlatform().name("subtitle-audio-cleanup").daemon(false).start(() -> {
+                deleteTemporaryPath(audio);
+                deleteTemporaryPath(audio.getParent());
+            });
         }
     }
 

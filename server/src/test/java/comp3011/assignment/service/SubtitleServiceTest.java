@@ -3,14 +3,18 @@ package comp3011.assignment.service;
 import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.containsString;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withServiceUnavailable;
 
+import java.nio.file.Path;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
@@ -19,16 +23,20 @@ import org.springframework.web.client.RestClient;
 
 import comp3011.assignment.api.SubtitleSegment;
 import comp3011.assignment.api.SubtitleWord;
+import tools.jackson.databind.json.JsonMapper;
 
 /** A3 NOTE: Mocks upstream HTTP to verify multipart metadata, word grouping, silence filtering and duration accounting. */
 class SubtitleServiceTest {
+    @TempDir
+    Path cacheDirectory;
+
     @Test
     void sendsLosslessAudioAndReturnsWordTimesOnlyForRetainedSegments() {
         String url = "https://stub.example.test/v1/audio/transcriptions";
         RestClient.Builder builder = RestClient.builder();
         MockRestServiceServer upstream = MockRestServiceServer.bindTo(builder).build();
         GlobalStatistics usage = new GlobalStatistics();
-        SubtitleService service = new SubtitleService(builder.build(), "test-key", url, usage);
+        SubtitleService service = new SubtitleService(builder.build(), "test-key", url, usage, cache());
 
         // A3 NOTE: Inspect the outgoing timestamp/language fields without sending audio to an external service.
         upstream.expect(requestTo(url)).andExpect(method(HttpMethod.POST))
@@ -54,7 +62,8 @@ class SubtitleServiceTest {
                         }
                         """, MediaType.APPLICATION_JSON));
 
-        var clip = new MockMultipartFile("file", "clip.flac", "audio/flac", new byte[] {1, 2, 3});
+        byte[] audio = {1, 2, 3};
+        var clip = new MockMultipartFile("file", "clip.flac", "audio/flac", audio);
         var response = service.transcribe(clip);
 
         assertEquals(List.of(new SubtitleSegment(0.5, 1.4, "Hello, world!", List.of(
@@ -62,6 +71,45 @@ class SubtitleServiceTest {
                 new SubtitleSegment(2.5, 3.5, "Bye.", List.of(new SubtitleWord("Bye", 2.6, 3.3)))),
                 response.segments());
         assertEquals(4, usage.getTranscriptionSeconds());
+        var renamed = new MockMultipartFile("file", "renamed.flac", "audio/flac", audio);
+        assertEquals(response, service.transcribe(renamed));
+        assertEquals(4, usage.getTranscriptionSeconds());
         upstream.verify();
+
+        GlobalStatistics afterRestart = new GlobalStatistics();
+        var restarted = new SubtitleService(RestClient.create(), "", url, afterRestart, cache());
+        assertEquals(response, restarted.transcribe(renamed));
+        assertEquals(0, afterRestart.getTranscriptionSeconds());
+    }
+
+    @Test
+    void retriesAfterAnUpstreamFailureAndUsesAudioContentAsTheKey() {
+        String url = "https://stub.example.test/v1/audio/transcriptions";
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer upstream = MockRestServiceServer.bindTo(builder).build();
+        GlobalStatistics usage = new GlobalStatistics();
+        SubtitleService service = new SubtitleService(builder.build(), "test-key", url, usage, cache());
+        upstream.expect(requestTo(url)).andRespond(withServiceUnavailable());
+        upstream.expect(requestTo(url)).andRespond(withSuccess("""
+                {"segments":[{"start":0,"end":1,"text":"First"}],"usage":{"type":"duration","seconds":1}}
+                """, MediaType.APPLICATION_JSON));
+        upstream.expect(requestTo(url)).andRespond(withSuccess("""
+                {"segments":[{"start":0,"end":2,"text":"Different"}],"usage":{"type":"duration","seconds":2}}
+                """, MediaType.APPLICATION_JSON));
+
+        var first = new MockMultipartFile("file", "clip.wav", "audio/wav", new byte[] {1});
+        var different = new MockMultipartFile("file", "clip.wav", "audio/wav", new byte[] {2});
+        assertThrows(TranscriptionServiceException.class, () -> service.transcribe(first));
+        assertEquals(0, usage.getTranscriptionSeconds());
+        var firstResponse = service.transcribe(first);
+        assertEquals("First", firstResponse.segments().getFirst().text());
+        assertEquals("Different", service.transcribe(different).segments().getFirst().text());
+        assertEquals(firstResponse, service.transcribe(first));
+        assertEquals(3, usage.getTranscriptionSeconds());
+        upstream.verify();
+    }
+
+    private SubtitleCache cache() {
+        return new SubtitleCache(cacheDirectory.toString(), JsonMapper.builder().build());
     }
 }

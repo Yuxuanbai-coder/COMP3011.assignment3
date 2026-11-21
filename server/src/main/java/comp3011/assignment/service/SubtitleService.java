@@ -28,21 +28,28 @@ public class SubtitleService {
     private final String apiKey;
     private final String transcriptionUrl;
     private final GlobalStatistics globalStatistics;
+    private final SubtitleCache cache;
 
-    /** A3 NOTE: Injects the shared HTTP client, server-side key, upstream URL and process-wide usage counters. */
+    /** A3 NOTE: Connects the upstream client, shared cache, and process-wide usage counters. */
     public SubtitleService(
             RestClient transcriptionRestClient,
             @Value("${OPENAI_API_KEY:}") String apiKey,
             @Value("${openai.transcription-url}") String transcriptionUrl,
-            GlobalStatistics globalStatistics) {
+            GlobalStatistics globalStatistics,
+            SubtitleCache cache) {
         this.restClient = transcriptionRestClient;
         this.apiKey = apiKey;
         this.transcriptionUrl = transcriptionUrl;
         this.globalStatistics = globalStatistics;
+        this.cache = cache;
+    }
+
+    public SubtitleResponse transcribe(MultipartFile file) {
+        return cache.getOrTranscribe(file, () -> transcribeOnline(file));
     }
 
     /** A3 NOTE: Requests verbose word/segment timestamps, filters likely silence and groups retained words by segment. */
-    public SubtitleResponse transcribe(MultipartFile file) {
+    private SubtitleResponse transcribeOnline(MultipartFile file) {
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException("OPENAI_API_KEY is not configured");
         }
@@ -69,14 +76,14 @@ public class SubtitleService {
         }
 
         if (response == null) {
-            throw new IllegalStateException("Transcription response is empty");
+            throw new TranscriptionServiceException("Transcription response is empty");
         }
 
         WhisperUsage usage = response.usage();
 
-        if (usage == null || usage.seconds() == null
-                || !"duration".equals(usage.type())) {
-            throw new IllegalStateException("Transcription usage is unavailable");
+        if (usage == null || usage.seconds() == null || !"duration".equals(usage.type())
+                || !Double.isFinite(usage.seconds()) || usage.seconds() < 0) {
+            throw new TranscriptionServiceException("Transcription usage is unavailable");
         }
 
         // A3 NOTE: Count the duration reported by each successful upstream response, including overlapping request audio.
