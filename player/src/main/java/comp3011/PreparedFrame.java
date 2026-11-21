@@ -14,14 +14,12 @@ record PreparedFrame(
         byte[] pixels,
         int width,
         int height,
-        int frameNumber,
         long mediaTimestampUs,
         long logicalTimestampUs,
-        long targetTimeNs,
-        long preparedAtNs) {
+        long targetTimeNs) {
 
     PreparedFrame delayedBy(long pauseDurationNs) {
-        return new PreparedFrame(playbackGeneration, pixels, width, height, frameNumber, mediaTimestampUs,
-                logicalTimestampUs, targetTimeNs + pauseDurationNs, preparedAtNs + pauseDurationNs);
+        return new PreparedFrame(playbackGeneration, pixels, width, height, mediaTimestampUs,
+                logicalTimestampUs, targetTimeNs + pauseDurationNs);
     }
 }

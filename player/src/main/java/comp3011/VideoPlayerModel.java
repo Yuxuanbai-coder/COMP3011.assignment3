@@ -92,7 +92,9 @@ public class VideoPlayerModel {
     private final ReadOnlyLongWrapper displayedDurationUs = new ReadOnlyLongWrapper(NO_SEEK_REQUEST);
     private final ReadOnlyObjectWrapper<SubtitleLoader.Progress> subtitleProgress =
             new ReadOnlyObjectWrapper<>(new SubtitleLoader.Progress(SubtitleLoader.State.OFF, 0, 0));
+    private static final long INITIAL_SUBTITLE_WAIT_NS = TimeUnit.SECONDS.toNanos(10);
     private boolean waitingForSubtitles;
+    private long subtitleWaitDeadlineNs;
     private long requestedSubtitleVersion;
     private String displayedSubtitleText = "";
     private WritableImage displayImage;
@@ -188,6 +190,7 @@ public class VideoPlayerModel {
         displayedDurationUs.set(NO_SEEK_REQUEST);
         requestedSubtitleVersion = subtitleLoader.setVideo(file);
         waitingForSubtitles = subtitlesEnabled.get();
+        subtitleWaitDeadlineNs = 0;
         subtitleLoader.setEnabled(waitingForSubtitles);
         enqueueCommand(new PlaybackCommand.Play(file, requestedSubtitleVersion, waitingForSubtitles));
     }
@@ -639,11 +642,9 @@ public class VideoPlayerModel {
                     pixels,
                     frame.imageWidth,
                     frame.imageHeight,
-                    frameNumber,
                     mediaTimestampUs,
                     logicalTimestampUs,
-                    targetTimeNs,
-                    System.nanoTime());
+                    targetTimeNs);
         }
 
         return null;
@@ -727,6 +728,9 @@ public class VideoPlayerModel {
             if (event instanceof PlaybackEvent.MediaOpened media) {
                 displayedDurationUs.set(media.durationUs());
                 videoSizeChangedHandler.accept(media.width(), media.height());
+                if (waitingForSubtitles && subtitleWaitDeadlineNs == 0) {
+                    subtitleWaitDeadlineNs = System.nanoTime() + INITIAL_SUBTITLE_WAIT_NS;
+                }
             } else if (event instanceof PlaybackEvent.StatusChanged statusChanged) {
                 statusChangedHandler.accept(statusChanged.status());
             } else if (event instanceof PlaybackEvent.PlaybackStateChanged stateChanged) {
@@ -767,20 +771,6 @@ public class VideoPlayerModel {
         subtitleLoader.moveTo(frame.mediaTimestampUs());
         relativeSeekBaseUs.set(NO_SEEK_REQUEST);
 
-        // Dump some logging to the console once per second so that real time performance can be monitored.
-        if (intFrameRate > 0 && frame.frameNumber() % intFrameRate == 0) {
-            long remainingUs = (frame.targetTimeNs() - frame.preparedAtNs()) / 1_000L;
-            if (remainingUs < 0) {
-                System.out.printf("Frame headroom is \u001B[31m%5dus\u001B[0m out of %dus spare.%n",
-                        remainingUs,
-                        videoFrameDurationUs);
-            } else {
-                System.out.printf("Frame headroom is \u001B[32m%5dus\u001B[0m out of %dus spare.%n",
-                        remainingUs,
-                        videoFrameDurationUs);
-            }
-        }
-
         frameReadyHandler.accept(displayImage);
     }
 
@@ -795,7 +785,9 @@ public class VideoPlayerModel {
         if (!progress.equals(subtitleProgress.get())) {
             subtitleProgress.set(progress);
         }
-        if (progress.state() == SubtitleLoader.State.READY || progress.state() == SubtitleLoader.State.NO_AUDIO) {
+        if (progress.state() == SubtitleLoader.State.READY || progress.state() == SubtitleLoader.State.NO_AUDIO
+                || progress.state() == SubtitleLoader.State.FAILED
+                || subtitleWaitDeadlineNs != 0 && System.nanoTime() - subtitleWaitDeadlineNs >= 0) {
             resumeAfterSubtitlePreparation();
         }
     }
@@ -803,6 +795,7 @@ public class VideoPlayerModel {
     private void resumeAfterSubtitlePreparation() {
         if (waitingForSubtitles) {
             waitingForSubtitles = false;
+            subtitleWaitDeadlineNs = 0;
             enqueueCommand(new PlaybackCommand.ResumePrepared(requestedSubtitleVersion));
         }
     }

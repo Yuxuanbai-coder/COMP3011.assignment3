@@ -32,7 +32,9 @@ class AudioExtractorTest {
                 new AudioFormat(rate, 16, 1, true, false), sampleCount)) {
             AudioSystem.write(audio, AudioFileFormat.Type.WAVE, input.toFile());
         }
-        var extracted = AudioExtractor.extractSubtitleChunk(input, clip, 400_000, 500_000).orElseThrow();
+        Path decoded = folder.resolve("original.pcm");
+        assertEquals(2_000_000L, AudioExtractor.decodeSubtitleAudio(input, decoded, 2_000_000L));
+        var extracted = AudioExtractor.writeSubtitleChunk(decoded, clip, 400_000, 500_000).orElseThrow();
         assertEquals(400_000, extracted.startUs());
         try (var audio = AudioSystem.getAudioInputStream(clip.toFile())) {
             assertEquals(8_000, audio.getFrameLength());

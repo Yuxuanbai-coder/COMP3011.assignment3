@@ -11,6 +11,7 @@
 **/.sts4-cache/
 **/.idea/
 **/.vscode/
+**/.a3-subtitle-cache/
 *.class
 *.log
 

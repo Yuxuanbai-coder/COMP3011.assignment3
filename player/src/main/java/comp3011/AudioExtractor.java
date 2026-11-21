@@ -1,11 +1,15 @@
 package comp3011;
 
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.ShortBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Optional;
 import java.util.OptionalLong;
 
@@ -22,7 +26,7 @@ import org.bytedeco.javacv.Frame;
 import org.bytedeco.javacv.FrameGrabber;
 
 public class AudioExtractor {
-    private static final int SUBTITLE_SAMPLE_RATE = 16_000;
+    static final int SUBTITLE_SAMPLE_RATE = 16_000;
     private static final int TIMESTAMP_ROUNDING_SAMPLES = SUBTITLE_SAMPLE_RATE / 500;
 
     public static Path extract(
@@ -77,46 +81,78 @@ public class AudioExtractor {
         }
     }
 
-    /** Copies resampled PCM to its original position on the clip's timeline and writes a WAV. */
-    static Optional<SubtitleAudio> extractSubtitleChunk(Path videoFile, Path audioFile, long startUs, long durationUs)
+    /** Decodes mono PCM once, with gaps preserved at their position on the media timeline. */
+    static long decodeSubtitleAudio(Path videoFile, Path pcmFile, long durationUs)
             throws Exception {
-        long endUs = validateWindow(audioFile, startUs, durationUs);
-        int sampleCount = Math.toIntExact(samplesAt(durationUs));
-        byte[] bytes = new byte[Math.multiplyExact(sampleCount, Short.BYTES)];
-        ShortBuffer pcm = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer();
-        int filledUntil = 0;
+        long sampleLimit = durationUs > 0 ? samplesAt(durationUs) : Long.MAX_VALUE;
+        byte[] bytes = new byte[16_384];
+        byte[] silence = new byte[bytes.length];
+        ShortBuffer transfer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer();
+        long filledUntil = 0;
         checkInterrupted();
-        try (var grabber = new FFmpegFrameGrabber(videoFile.toFile())) {
+        try (var grabber = new FFmpegFrameGrabber(videoFile.toFile());
+                var output = new BufferedOutputStream(Files.newOutputStream(pcmFile, StandardOpenOption.CREATE_NEW))) {
             grabber.setVideoStream(Integer.MAX_VALUE);
             grabber.setSampleMode(FrameGrabber.SampleMode.SHORT);
             grabber.setAudioChannels(1);
             grabber.setSampleRate(SUBTITLE_SAMPLE_RATE);
             grabber.start();
             long originUs = mediaStartUs(grabber);
-            if (startUs > 1_000_000L) {
-                grabber.setTimestamp(startUs - 1_000_000L);
-            }
             Frame frame;
-            while ((frame = grabber.grabSamples()) != null && frame.timestamp - originUs < endUs) {
+            while ((frame = grabber.grabSamples()) != null) {
                 checkInterrupted();
-                ShortBuffer samples = (ShortBuffer) frame.samples[0];
-                long offset = samplesAt(frame.timestamp - originUs - startUs);
+                long offset = samplesAt(frame.timestamp - originUs);
+                if (offset >= sampleLimit) {
+                    break;
+                }
                 if (filledUntil > 0 && Math.abs(offset - filledUntil) <= TIMESTAMP_ROUNDING_SAMPLES) {
                     // Container timestamps can round consecutive PCM frames to slightly different boundaries.
                     offset = filledUntil;
                 }
+                ShortBuffer samples = (ShortBuffer) frame.samples[0];
                 long destination = Math.max(filledUntil, offset);
                 long skip = destination - offset;
-                long count = Math.min(sampleCount - destination, samples.remaining() - skip);
+                long count = Math.min(sampleLimit - destination, samples.remaining() - skip);
                 if (count > 0) {
-                    pcm.put((int) destination, samples, samples.position() + (int) skip, (int) count);
-                    filledUntil = (int) (destination + count);
+                    while (filledUntil < destination) {
+                        checkInterrupted();
+                        int zeroSamples = (int) Math.min(transfer.capacity(), destination - filledUntil);
+                        output.write(silence, 0, zeroSamples * Short.BYTES);
+                        filledUntil += zeroSamples;
+                    }
+                    int sourceIndex = samples.position() + (int) skip;
+                    while (count > 0) {
+                        int copy = (int) Math.min(transfer.capacity(), count);
+                        transfer.put(0, samples, sourceIndex, copy);
+                        output.write(bytes, 0, copy * Short.BYTES);
+                        sourceIndex += copy;
+                        filledUntil += copy;
+                        count -= copy;
+                    }
                 }
             }
         }
-        if (filledUntil == 0) {
+        checkInterrupted();
+        return Math.round(filledUntil * (1_000_000.0 / SUBTITLE_SAMPLE_RATE));
+    }
+
+    /** Writes one WAV window from the already decoded audio. */
+    static Optional<SubtitleAudio> writeSubtitleChunk(Path pcmFile, Path audioFile, long startUs, long durationUs)
+            throws IOException, InterruptedException {
+        validateWindow(audioFile, startUs, durationUs);
+        int sampleCount = Math.toIntExact(samplesAt(durationUs));
+        byte[] bytes = new byte[Math.multiplyExact(sampleCount, Short.BYTES)];
+        ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+        try (var source = FileChannel.open(pcmFile, StandardOpenOption.READ)) {
+            source.position(samplesAt(startUs) * Short.BYTES);
+            while (buffer.hasRemaining() && source.read(buffer) > 0) {
+                checkInterrupted();
+            }
+        }
+        if (buffer.position() == 0) {
             return Optional.empty();
         }
+        ShortBuffer pcm = buffer.rewind().asShortBuffer();
         AudioFormat format = new AudioFormat(SUBTITLE_SAMPLE_RATE, 16, 1, true, false);
         try (var audio = new AudioInputStream(new ByteArrayInputStream(bytes), format, sampleCount)) {
             AudioSystem.write(audio, AudioFileFormat.Type.WAVE, audioFile.toFile());
@@ -141,31 +177,6 @@ public class AudioExtractor {
     static long mediaStartUs(FFmpegFrameGrabber grabber) {
         long startUs = grabber.getFormatContext().start_time();
         return startUs == AV_NOPTS_VALUE ? 0 : startUs;
-    }
-
-    /** Reads the audio end from the samples when the container omits its duration. */
-    static long audioDurationUs(Path videoFile) throws Exception {
-        checkInterrupted();
-        try (FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(videoFile.toFile())) {
-            grabber.setVideoStream(Integer.MAX_VALUE);
-            grabber.start();
-            long originUs = mediaStartUs(grabber);
-            long endUs = 0;
-            while (true) {
-                checkInterrupted();
-                Frame frame = grabber.grabSamples();
-                if (frame == null) {
-                    return endUs;
-                }
-                long packetEndUs = frame.timestamp - originUs + samplesPerChannel(frame) * 1_000_000L / frame.sampleRate;
-                endUs = Math.max(endUs, packetEndUs);
-            }
-        }
-    }
-
-    private static int samplesPerChannel(Frame frame) {
-        int samples = frame.samples[0].remaining();
-        return frame.samples.length == 1 ? samples / frame.audioChannels : samples;
     }
 
     record SubtitleAudio(long startUs, AudioActivity activity) {
