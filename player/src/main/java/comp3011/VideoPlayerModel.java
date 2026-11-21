@@ -457,11 +457,18 @@ public class VideoPlayerModel {
         }
     }
 
+    /** Downmixes playback audio to stereo, including dialogue carried by a surround center channel. */
+    static FFmpegFrameGrabber createPlaybackGrabber(File file) {
+        FFmpegFrameGrabber playbackGrabber = new FFmpegFrameGrabber(file);
+        playbackGrabber.setImageMode(FrameGrabber.ImageMode.COLOR);
+        playbackGrabber.setSampleMode(FrameGrabber.SampleMode.SHORT);
+        playbackGrabber.setAudioChannels(2);
+        return playbackGrabber;
+    }
+
     /** Opens native decode resources on playbackWorker and asks audioOutputWorker to open its device. */
     private void openPlaybackResources(long startTimestampUs) throws Exception {
-        grabber = new FFmpegFrameGrabber(videoFile);
-        grabber.setImageMode(FrameGrabber.ImageMode.COLOR);
-        grabber.setSampleMode(FrameGrabber.SampleMode.SHORT);
+        grabber = createPlaybackGrabber(videoFile);
         grabber.start();
         if (!grabber.hasVideo()) {
             throw new IOException("The selected file does not contain a video track");
