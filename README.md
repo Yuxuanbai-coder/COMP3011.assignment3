@@ -7,42 +7,50 @@ A JavaFX video player with a Spring Boot service that generates English captions
 
 ## Quick start for macOS
 
-Open two Terminal windows. **Terminal 1 runs the subtitle server. Terminal 2 runs the player.** Copy each command block into the indicated window. The paths below match this Mac; update the project and key paths if using another computer.
+Open two Terminal windows. **Terminal 1 runs the subtitle server. Terminal 2 runs the player.** The paths below assume you cloned the repository into `$HOME/A3`. Adjust the project and key paths to match your MacBook.
 
 | What you need | Location or requirement |
 | --- | --- |
-| Project | `/Users/yuxuanbai/A3/COMP3011.assignment3` |
-| API key | `/Users/yuxuanbai/A3/TEST FILE/key.txt`, containing only the key on one line |
-| Java | JDK 25; check with `java -version` |
+| Project | `$HOME/A3/COMP3011.assignment3` |
+| API key | `$HOME/A3/TEST FILE/key.txt`, containing only the key on one line |
+| Java | JDK 25 |
 | Internet | Access to Maven downloads and the OpenAI API, with available API quota |
 | Video | A local video containing English speech, such as an MP4 or MKV |
+
+Select JDK 25 in both terminals before running Maven.
+
+```bash
+export JAVA_HOME="$(/usr/libexec/java_home -v 25)"
+export PATH="$JAVA_HOME/bin:$PATH"
+java -version
+```
+
+Keep the MacBook online for the first launch so Maven can download the dependencies for macOS.
 
 ### Step 1: start the subtitle server in Terminal 1
 
 Copy the whole block below. It reads the API key from `key.txt` and starts the server without printing the key.
 
 ```bash
-cd /Users/yuxuanbai/A3/COMP3011.assignment3
+cd "$HOME/A3/COMP3011.assignment3"
 
-IFS= read -r OPENAI_API_KEY < "../TEST FILE/key.txt"
-export OPENAI_API_KEY
+a3_key_file="$HOME/A3/TEST FILE/key.txt"
+export OPENAI_API_KEY="$(tr -d '\r\n' < "$a3_key_file")"
 
 sh server/mvnw -f server/pom.xml spring-boot:run 2>&1 | tee /tmp/a3-live-server.log
 ```
 
 When you see a message containing `Started Assignment1Application`, the server is ready. **Leave this terminal running.** It is normal for the command to keep running without returning to the prompt.
 
-The first run may download Maven and dependencies, so startup can take longer.
-
 ### Step 2: open the player in Terminal 2
 
 ```bash
-cd /Users/yuxuanbai/A3/COMP3011.assignment3
+cd "$HOME/A3/COMP3011.assignment3/player"
 
-sh server/mvnw -f player/pom.xml javafx:run 2>&1 | tee /tmp/a3-live-player.log
+sh ../server/mvnw javafx:run 2>&1 | tee /tmp/a3-live-player.log
 ```
 
-The player opens a window where you can choose a video. Audio is enabled by default.
+The player opens a window where you can choose a video. Audio is enabled by default. Launch from this same `player/` directory to reuse its subtitle cache.
 
 ### Step 3: choose a video
 
@@ -145,7 +153,7 @@ Subtitle processing follows the same left-to-right order. With `-bS`, light blee
 | `A` | Toggle audio |
 | **Stop** / `Esc` | Exit the player |
 
-If the video becomes unavailable during playback, the player stops at the last visible frame and reports the interruption. Reconnect the drive and resume, or choose a different file with **Open video**.
+If the video becomes unavailable during playback, the player keeps the last visible frame and reports `Media unavailable`. Reconnect the drive and press **Space** when the file is available at the original path. If the drive mounts at a different path, use **Open video** to select the file again.
 
 ## Online captions and cache reuse
 
@@ -177,7 +185,7 @@ When finished, close the player, then press **Ctrl+C** in Terminal 1 to stop the
 | --- | --- |
 | `File not found: "/..."` | Launch the player using Step 2, then click **Open video**. Nested quotes in `javafx.args` may become part of the filename. |
 | `curl: ... Failed to connect` | Check that Terminal 1 is still running and wait for the server to finish starting. |
-| `OPENAI_API_KEY is not configured` | Stop the server in Terminal 1, check that `../TEST FILE/key.txt` contains the key, and repeat the whole command block in Step 1. |
+| `OPENAI_API_KEY is not configured` | Check the `key.txt` path in your startup command and restart the server with a valid key. |
 | `Port 8080 was already in use` | Check the previous server terminal. Reuse the correct running service, or press Ctrl+C in its terminal before restarting it. |
 | No sound | Press `A` to enable audio. For command-line playback, include `-a`. The player converts surround audio to stereo for compatibility with normal speakers and headphones. |
 | No captions / `Subtitles incomplete` | Check errors in both terminals. Confirm that the video contains English speech, captions are enabled, the OpenAI API is reachable, and the key and quota are available. |
@@ -223,10 +231,26 @@ sh server/mvnw -f player/pom.xml javafx:run '-Djavafx.args=-x -1 -w -v'
 To see all options, run this from the project root:
 
 ```bash
-cd /Users/yuxuanbai/A3/COMP3011.assignment3
+cd "$HOME/A3/COMP3011.assignment3"
 
 sh server/mvnw -f player/pom.xml javafx:run '-Djavafx.args=--help'
 ```
+
+## Viva rehearsal on macOS
+
+With the server running, save your demo video as `player/test.mp4` and launch it directly with audio, black and white, a vignette, and the `-SbS` effect sequence.
+
+```bash
+cd "$HOME/A3/COMP3011.assignment3/player"
+sh ../server/mvnw javafx:run '-Djavafx.args=test.mp4 -a -wvSbS'
+```
+
+1. Play the demo clip online once and let the subtitle track finish loading. Rehearse pausing, seeking, toggling CC, and resuming. Run again with `-wvbS` to compare the effect order.
+2. Press **Command+O** and open an unseen English video directly from the USB drive. Verify that captions appear and that `usage` increases for newly transcribed audio.
+3. Disconnect and reconnect internet access while leaving the local subtitle server running. Cached captions remain available. Temporary failures for uncached audio are retried automatically.
+4. Demonstrate media loss while playing from the USB drive. After reconnecting the drive, use the recovery controls described above.
+
+After a successful online launch, add `-o` before `javafx:run` to relaunch the player offline using the downloaded Maven dependencies.
 
 ## Subtitle cache location
 
@@ -239,7 +263,7 @@ The server stores successful responses in `.a3-subtitle-server-cache/v1/` under 
 Run these commands from the project root:
 
 ```bash
-cd /Users/yuxuanbai/A3/COMP3011.assignment3
+cd "$HOME/A3/COMP3011.assignment3"
 
 sh server/mvnw -f player/pom.xml test
 sh server/mvnw -f server/pom.xml test
@@ -253,9 +277,9 @@ To print frame rate and per-stage processing times while using effects:
 VIDEOPLAYER_PROFILE=true sh server/mvnw -f player/pom.xml javafx:run '-Djavafx.args=-w -v -d'
 ```
 
-## Alternative: Windows PowerShell
+## Quick start for Windows PowerShell
 
-JDK 25 is also required on Windows. Open two terminals and change to the Windows project root in both. If needed, configure Java first:
+Open two PowerShell terminals at the project root. Set `JAVA_HOME` to your JDK 25 installation in both terminals, then confirm the Java version.
 
 ```powershell
 $env:JAVA_HOME = 'C:\path\to\jdk-25'
@@ -263,26 +287,34 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 java -version
 ```
 
-In Terminal 1, assuming the key is also saved in `TEST FILE/key.txt` next to the project:
+### Start the subtitle server in Terminal 1
+
+This example reads `key.txt` from Downloads. Set `$a3KeyFile` to the file's actual location.
 
 ```powershell
-$env:OPENAI_API_KEY = (Get-Content -Raw '..\TEST FILE\key.txt').Trim()
+$a3KeyFile = Join-Path $env:USERPROFILE 'Downloads\key.txt'
+$env:OPENAI_API_KEY = (Get-Content -Raw -LiteralPath $a3KeyFile).Trim()
 .\server\mvnw.cmd -f .\server\pom.xml spring-boot:run
 ```
 
-In Terminal 2:
+Leave this terminal running after the server starts on port 8080.
+
+### Start the player in Terminal 2
+
+Start from the `player/` directory so later runs can use the same local subtitle cache.
 
 ```powershell
-.\server\mvnw.cmd -f .\player\pom.xml javafx:run
+Set-Location .\player
+..\server\mvnw.cmd javafx:run
 ```
 
-To start with effects instead, use the same option names as on macOS:
+Use **Open video** or press **Ctrl+O** to select a video. To launch directly with audio, subtitles, and the Viva effects, save `test.mp4` in the `player/` directory and run this from that directory.
 
 ```powershell
-.\server\mvnw.cmd -f .\player\pom.xml javafx:run '-Djavafx.args=-w -v -s -f -d'
+..\server\mvnw.cmd javafx:run '-Djavafx.args=test.mp4 -a -wvSbS'
 ```
 
-Click **Open video** to choose a video. The Windows shortcut is **Ctrl+O**. Check server usage with:
+Keep the first launch online to download dependencies. After that, add `-o` before `javafx:run` to relaunch offline. Check subtitle usage from a free terminal.
 
 ```powershell
 Invoke-RestMethod http://localhost:8080/api/v1/global/usage
